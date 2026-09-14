@@ -1636,7 +1636,19 @@ async function handleWebRequest(request: Request, env: Env): Promise<Response> {
     if (role !== 'admin') return jsonResponse({ error: 'admin required' }, { status: 403 });
     const eventsStore = new EventsStore(env.DB);
     const settings = await eventsStore.getEventsSettings();
-    return jsonResponse({ settings });
+    // Whether Canyon registration is already open for the upcoming week —
+    // the dashboard disables the "open now" button in that case.
+    const { weekStart: upcomingWeekStart } = getNextMondayWeekStart(new Date());
+    const upcomingCanyon = (await eventsStore.listEvents()).find(
+      (e) => e.kind === 'canyon' && e.weekStart === upcomingWeekStart,
+    );
+    return jsonResponse({
+      settings,
+      canyonOpenNow: {
+        weekStart: upcomingWeekStart,
+        alreadyOpen: upcomingCanyon?.status === 'open',
+      },
+    });
   }
 
   if (role !== 'admin') {

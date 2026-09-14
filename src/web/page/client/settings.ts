@@ -68,8 +68,10 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
               st.textContent = t(res.data.alreadyOpen ? 'settings.alreadyOpen' : 'settings.opened', { week: week });
               st.style.color = '';
             }
+            // Registration is now open for this week — no point keeping the button enabled.
+            settingsSetOpenNowDisabled(true);
+            if (st) st.setAttribute('data-open-state', 'already-open');
             evNeedsRefresh = true;
-            setTimeout(function () { if (st) st.textContent = ''; }, 5000);
           } else {
             if (st) { st.textContent = t('common.error') + ((res.data && res.data.error) || ('HTTP ' + res.status)); st.style.color = 'var(--bad)'; }
           }
@@ -102,10 +104,63 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
     });
   }
 
+  // Toggle the "open Canyon now" button. The button carries inline background/
+  // color styles, which override the browser's native disabled graying — so a
+  // merely-disabled button still looks clickable. Apply explicit visual styling
+  // (faded + non-clickable cursor) alongside the attribute.
+  function settingsSetOpenNowDisabled(disabled) {
+    var btn = document.getElementById('settings-canyon-open-now');
+    if (!btn) return;
+    if (disabled) {
+      btn.setAttribute('disabled', 'true');
+      btn.style.opacity = '0.45';
+      btn.style.cursor = 'not-allowed';
+    } else {
+      btn.removeAttribute('disabled');
+      btn.style.opacity = '';
+      btn.style.cursor = '';
+    }
+  }
+
+  // Disable the "open Canyon now" button when registration is already open for
+  // the upcoming week (info comes from GET /api/settings as canyonOpenNow).
+  function settingsUpdateOpenNowButton(info) {
+    var st = document.getElementById('settings-canyon-open-status');
+    if (info && info.alreadyOpen) {
+      settingsSetOpenNowDisabled(true);
+      if (st) {
+        st.textContent = t('settings.alreadyOpen', { week: info.weekStart });
+        st.style.color = '';
+        st.setAttribute('data-open-state', 'already-open');
+      }
+    } else {
+      settingsSetOpenNowDisabled(false);
+      // Clear a stale already-open note (e.g. the week rolled over); never
+      // touch transient messages such as errors (they carry no attribute).
+      if (st && st.getAttribute('data-open-state') === 'already-open') {
+        st.textContent = '';
+        st.removeAttribute('data-open-state');
+      }
+    }
+  }
+
+  // Lightweight refresh of just the open-now button state (never touches the
+  // form, so unsaved edits survive tab switches). Called on every visit to the
+  // Settings tab — the event may have been opened elsewhere since last time.
+  function settingsRefreshOpenState() {
+    fetch('/api/settings?token=' + encodeURIComponent(TOKEN))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.canyonOpenNow) settingsUpdateOpenNowButton(data.canyonOpenNow);
+      })
+      .catch(function (err) { console.error('Settings open-state refresh error:', err); });
+  }
+
   function settingsLoad() {
     fetch('/api/settings?token=' + encodeURIComponent(TOKEN))
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        if (data.canyonOpenNow) settingsUpdateOpenNowButton(data.canyonOpenNow);
         if (!data.settings) return;
         var s = data.settings;
         var caoEl = document.getElementById('settings-canyon-auto-open');

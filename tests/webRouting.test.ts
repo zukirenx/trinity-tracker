@@ -1060,6 +1060,51 @@ describe('Worker web routing', () => {
       expect(res.status).toBe(403);
     });
 
+    it('GET /api/settings reports canyonOpenNow=false when nothing is open', async () => {
+      const env = makeEnv();
+      const res = await worker.fetch(
+        new Request('https://example.com/api/settings?token=secret-token'),
+        env,
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as { canyonOpenNow: { weekStart: string; alreadyOpen: boolean } };
+      expect(body.canyonOpenNow.weekStart).toBe(getNextMondayWeekStart(new Date()).weekStart);
+      expect(body.canyonOpenNow.alreadyOpen).toBe(false);
+    });
+
+    it('GET /api/settings reports canyonOpenNow=true when Canyon is open for the upcoming week', async () => {
+      const env = makeEnv();
+      const { weekStart } = getNextMondayWeekStart(new Date());
+      await env.DB.prepare(
+        "INSERT INTO poc_events_event (kind, week_start, status) VALUES ('canyon', ?, 'open')",
+      ).bind(weekStart).run();
+      const res = await worker.fetch(
+        new Request('https://example.com/api/settings?token=secret-token'),
+        env,
+        ctx,
+      );
+      const body = await res.json() as { canyonOpenNow: { weekStart: string; alreadyOpen: boolean } };
+      expect(body.canyonOpenNow).toEqual({ weekStart, alreadyOpen: true });
+    });
+
+    it('GET /api/settings reports canyonOpenNow=false for locked or other-week events', async () => {
+      const env = makeEnv();
+      const { weekStart } = getNextMondayWeekStart(new Date());
+      // Locked event for the upcoming week + open event for another week.
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO poc_events_event (kind, week_start, status) VALUES ('canyon', ?, 'locked')").bind(weekStart),
+        env.DB.prepare("INSERT INTO poc_events_event (kind, week_start, status) VALUES ('canyon', '2000-01-03', 'open')"),
+      ]);
+      const res = await worker.fetch(
+        new Request('https://example.com/api/settings?token=secret-token'),
+        env,
+        ctx,
+      );
+      const body = await res.json() as { canyonOpenNow: { weekStart: string; alreadyOpen: boolean } };
+      expect(body.canyonOpenNow).toEqual({ weekStart, alreadyOpen: false });
+    });
+
     it('POST /api/settings saves and round-trips correctly', async () => {
       const env = makeEnv();
       const res = await worker.fetch(
@@ -1462,6 +1507,22 @@ describe('Worker web routing', () => {
       ).bind(body.weekStart).first<{ registration_closes_at: string }>();
       // Monday 18:00 server time = 20:00 UTC.
       expect(row!.registration_closes_at).toBe(`${body.weekStart}T20:00:00.000Z`);
+    });
+
+    it('open-now button has explicit disabled styling (inline styles beat native graying)', async () => {
+      const env = makeEnv();
+      const res = await worker.fetch(
+        new Request('https://example.com/?token=secret-token'),
+        env,
+        ctx,
+      );
+      const html = await res.text();
+      const script = html.slice(html.indexOf('<script>'));
+      // The disabled attribute alone is invisible on this button (custom inline
+      // background/color), so the client must also fade it + change the cursor.
+      expect(script).toContain('settings-canyon-open-now');
+      expect(script).toContain('not-allowed');
+      expect(script).toContain('settingsSetOpenNowDisabled');
     });
 
     it('settings page is fully in server time with hour-only close selects', async () => {

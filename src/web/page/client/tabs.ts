@@ -41,6 +41,10 @@ export const CLIENT_TABS: string = `  // ---- Tab switching ----
     if (name === 'settings' && !settingsInitialized) {
       settingsInitialized = true;
       settingsInit();
+    } else if (name === 'settings' && settingsInitialized && IS_ADMIN) {
+      // Re-check the open-now button state on every visit (form untouched, so
+      // unsaved edits survive): the event may have been opened elsewhere.
+      try { settingsRefreshOpenState(); } catch (e) { /* ignore */ }
     }
     if (!skipHash) {
       try { history.replaceState(null, '', '#' + name); } catch (e) { /* ignore */ }
