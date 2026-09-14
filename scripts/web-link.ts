@@ -1,10 +1,11 @@
-// CLI helper to read/rotate/set the WEB_ACCESS_TOKEN secret used by the
-// dashboard, and to print the full shareable link.
+// CLI helper to read/rotate the WEB_ACCESS_TOKEN secret used by the
+// dashboard, and to print the full shareable link. Tokens are always
+// auto-generated (cryptographic random) — there is deliberately no way to set
+// an explicit value, so a rotated-out token can never be reinstated.
 //
 // Usage:
-//   tsx scripts/web-link.ts                       # print current link
+//   tsx scripts/web-link.ts                       # print current link (generates one if none exists)
 //   tsx scripts/web-link.ts --rotate              # generate new token, deploy, print link
-//   tsx scripts/web-link.ts --set <token>         # set explicit token, deploy, print link
 //   tsx scripts/web-link.ts --url <url>           # override base URL
 //
 // Wrangler does not let us read secret *values* back from Cloudflare, so the
@@ -27,22 +28,24 @@ const WRANGLER_TOML = resolve(PROJECT_ROOT, 'wrangler.toml');
 
 interface Args {
   rotate: boolean;
-  set: string | null;
   url: string | null;
   readonly: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { rotate: false, set: null, url: null, readonly: false, help: false };
+  const args: Args = { rotate: false, url: null, readonly: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--rotate' || a === '-r') args.rotate = true;
-    else if (a === '--set') args.set = argv[++i] ?? null;
     else if (a === '--url') args.url = argv[++i] ?? null;
     else if (a === '--readonly' || a === '--read-only') args.readonly = true;
     else if (a === '--help' || a === '-h') args.help = true;
-    else if (!a.startsWith('-') && args.set === '') args.set = a;
+    else {
+      log(`✗ Unknown argument: ${a}`);
+      usage();
+      process.exit(2);
+    }
   }
   return args;
 }
@@ -117,6 +120,13 @@ function pushSecret(name: string, token: string): void {
   }
 }
 
+function generateToken(secretName: string, tokenFile: string): string {
+  const token = randomBytes(24).toString('hex');
+  pushSecret(secretName, token);
+  writeLocalToken(tokenFile, token);
+  return token;
+}
+
 function printLink(base: string, token: string): void {
   // URL on stdout — easy to copy/pipe. Diagnostics go to stderr.
   process.stdout.write(`${base}/?token=${encodeURIComponent(token)}\n`);
@@ -125,10 +135,9 @@ function printLink(base: string, token: string): void {
 function usage(): void {
   process.stderr.write(
 `Usage:
-  tsx scripts/web-link.ts                         # print current admin link
-  tsx scripts/web-link.ts --readonly              # print current read-only link
+  tsx scripts/web-link.ts                         # print current admin link (generates one if none exists)
+  tsx scripts/web-link.ts --readonly              # print current read-only link (generates one if none exists)
   tsx scripts/web-link.ts --rotate                # generate new token and push to Cloudflare
-  tsx scripts/web-link.ts --set <token>           # set an explicit token and push to Cloudflare
   tsx scripts/web-link.ts --url <baseUrl>         # override the base URL
 Env:
   WEB_URL                Base URL of the deployed Worker (overrides wrangler.toml).
@@ -148,38 +157,22 @@ function main(): void {
   const secretName = args.readonly ? 'WEB_READONLY_TOKEN' : 'WEB_ACCESS_TOKEN';
   const tokenFile = args.readonly ? TOKEN_FILE_READONLY : TOKEN_FILE_ADMIN;
   const label = args.readonly ? 'read-only ' : '';
-  const flagSuffix = args.readonly ? ':readonly' : '';
   const roleLabel = args.readonly ? 'Read-only token' : 'Token';
 
   if (args.rotate) {
-    const token = randomBytes(24).toString('hex');
-    pushSecret(secretName, token);
-    writeLocalToken(tokenFile, token);
+    const token = generateToken(secretName, tokenFile);
     log('✓ ' + roleLabel + ' rotated and saved to ' + tokenFile);
     printLink(base, token);
     return;
   }
 
-  if (args.set !== null) {
-    const token = args.set.trim();
-    if (!token) {
-      log('✗ --set requires a non-empty token');
-      process.exit(2);
-    }
-    pushSecret(secretName, token);
-    writeLocalToken(tokenFile, token);
-    log('✓ ' + roleLabel + ' saved to ' + tokenFile);
-    printLink(base, token);
-    return;
-  }
-
-  // Default: print current link from local mirror.
-  const token = readLocalToken(tokenFile);
+  // Default: print current link from local mirror, generating a token first
+  // when none exists yet.
+  let token = readLocalToken(tokenFile);
   if (!token) {
-    log('✗ No local ' + label + 'token found at ' + tokenFile + '.');
-    log('  Run `npm run web:link' + flagSuffix + ':rotate` to generate one, or');
-    log('  `npm run web:link' + flagSuffix + ':set -- <token>` if you already know it.');
-    process.exit(1);
+    log('• No local ' + label + 'token found — generating a new one …');
+    token = generateToken(secretName, tokenFile);
+    log('✓ ' + roleLabel + ' generated and saved to ' + tokenFile);
   }
   printLink(base, token);
 }

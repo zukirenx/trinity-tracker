@@ -15,10 +15,8 @@
     "register:commands": "tsx src/register-commands.ts",
     "web:link": "tsx scripts/web-link.ts",
     "web:link:rotate": "tsx scripts/web-link.ts --rotate",
-    "web:link:set": "tsx scripts/web-link.ts --set",
     "web:link:readonly": "tsx scripts/web-link.ts --readonly",
     "web:link:readonly:rotate": "tsx scripts/web-link.ts --readonly --rotate",
-    "web:link:readonly:set": "tsx scripts/web-link.ts --readonly --set",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts"
   },

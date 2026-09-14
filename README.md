@@ -196,13 +196,14 @@ The same Worker serves the dashboard at `GET /`, gated by token (`?token=` query
 Manage them with the bundled CLI (values are pushed to Cloudflare and mirrored to `.wrangler/web-token*`, which is gitignored):
 
 ```bash
-npm run web:link                # print current admin link
+npm run web:link                # print current admin link (generates one if none exists)
 npm run web:link:rotate         # new admin token -> Cloudflare -> print link
-npm run web:link:set -- <token> # set explicit admin token
-npm run web:link:readonly       # print current read-only link
+npm run web:link:readonly       # print current read-only link (generates one if none exists)
 npm run web:link:readonly:rotate
-npm run web:link:readonly:set -- <token>
 ```
+
+Tokens are always auto-generated on rotate — there is no way to set an
+explicit value, so a rotated-out token can never be reinstated through this CLI.
 
 Override the base URL with `--url https://your-worker…` or `WEB_URL` in `.env` / `CF_WORKERS_SUBDOMAIN` for the default `workers.dev` construction.
 
