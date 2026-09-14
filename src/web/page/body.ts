@@ -353,13 +353,13 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
       <span data-i18n="ev.reg.notes">Notes (optional)</span>
       <input type="text" id="ev-reg-notes" placeholder="anything the admin should know" style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem" data-i18n-attr="placeholder:ev.reg.notesPlaceholder" />
     </label>
-    <div style="display:flex;gap:.5rem;align-items:center;margin-top:.5rem">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.5rem">
       <button id="ev-reg-submit" style="background:var(--accent);color:#0d1117;border:none;border-radius:4px;padding:.35rem .8rem;cursor:pointer;font-weight:600" data-i18n="ev.reg.submit">Submit registration</button>
       <span class="status" id="ev-reg-status-msg"></span>
     </div>
   </div>
 
-  <div style="display:flex;align-items:baseline;gap:.5rem;margin:.75rem 0 .35rem">
+  <div style="display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap;margin:.75rem 0 .35rem">
     <h3 style="margin:0;font-size:.95rem" data-i18n="ev.regs.title">Registrations</h3>
     <span class="muted" id="ev-reg-count" style="font-size:.8rem"></span>
     ${isAdmin ? '<button id="ev-export-regs" class="muted" style="margin-left:auto;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:.2rem .5rem;cursor:pointer;font-size:.75rem" data-i18n="ev.regs.export">Copy as spreadsheet</button>' : ''}
@@ -381,7 +381,7 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
   <div id="ev-reg-empty" class="empty hidden" data-i18n="ev.regs.empty">No registrations yet.</div>
 
   <div id="ev-roster-section" style="display:none;margin-top:1rem;border-top:1px solid var(--border);padding-top:.75rem">
-    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+    <div class="ev-toolbar" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
       <h3 style="margin:.1rem 0;font-size:.95rem" data-i18n="ev.roster.title">Roster</h3>
       <span class="muted" id="ev-roster-status" style="font-size:.8rem"></span>
       <span class="spacer" style="flex:1"></span>
@@ -412,7 +412,11 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
           <span style="flex:1"></span>
           <button id="ev-compact-close" style="background:transparent;border:1px solid var(--border);color:var(--text);border-radius:4px;padding:.25rem .7rem;cursor:pointer;font-size:.8rem" data-i18n="ev.roster.compactClose">Close</button>
         </div>
-        <div id="ev-compact-teams" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.4rem .8rem"></div>
+        <div style="display:flex;gap:.4rem;margin-bottom:.45rem">
+          <button id="ev-compact-team-a" style="flex:1;background:transparent;border:1px solid var(--border);color:var(--text);border-radius:4px;padding:.3rem .5rem;cursor:pointer;font-size:.85rem;font-weight:600" data-i18n="ev.roster.teamA">Team A</button>
+          <button id="ev-compact-team-b" style="flex:1;background:transparent;border:1px solid var(--border);color:var(--text);border-radius:4px;padding:.3rem .5rem;cursor:pointer;font-size:.85rem;font-weight:600" data-i18n="ev.roster.teamB">Team B</button>
+        </div>
+        <div id="ev-compact-team"></div>
         <p class="muted" style="font-size:.72rem;margin:.45rem 0 0" data-i18n="ev.roster.compactNote">Mains only.</p>
       </div>
     </div>

@@ -37,6 +37,9 @@ export const PAGE_STYLES: string = `  :root {
   tbody tr:hover { background: var(--panel-2); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   td.name { font-weight: 500; word-break: break-word; }
+  /* Registration row admin actions (Ban / P / ×) always stay on one row;
+     the table's horizontal scroll absorbs the width on narrow screens. */
+  .ev-actions, .ev-actions button { white-space: nowrap; }
   .pill { display: inline-block; padding: .05rem .45rem; border-radius: 999px; font-size: .75rem; background: var(--panel-2); color: var(--muted); white-space: nowrap; }
   .pill.warn { background: #3a2a08; color: var(--warn); }
   .pill.bad { background: #3a0d0d; color: var(--bad); }
@@ -96,4 +99,10 @@ export const PAGE_STYLES: string = `  :root {
     #pick-eligible-list { grid-template-columns: 1fr !important; max-height: 50vh !important; }
     .filters .spacer { display: none; }
     .filters > button { flex: 1 1 auto; min-width: 6rem; }
+    /* Roster toolbar: title + status take a full row each, buttons settle
+       into an even two-per-row grid instead of ragged wrapped lines. */
+    .ev-toolbar { gap: .4rem; }
+    .ev-toolbar > h3, .ev-toolbar > #ev-roster-status { flex: 1 1 100%; margin: 0; }
+    .ev-toolbar > .spacer { display: none; }
+    .ev-toolbar > button { flex: 1 1 40%; min-width: 0; }
   }`;

@@ -45,7 +45,7 @@ export const CLIENT_ROSTER: string = `  function evRenderRegistrations(regs, eve
         '<td>' + escapeHtml(teamSlot) + '</td>' +
         (showPrio ? '<td>' + prioCellHtml + '</td>' : '') +
         (IS_ADMIN ? '<td class="muted ev-notes-col" style="font-size:.8rem">' + escapeHtml(r.notes || '') + '</td>' : '') +
-        '<td>' + (IS_ADMIN && eventStatus !== 'locked' ? '<button data-mid="' + r.memberId + '" data-banned="' + (r.isBanned ? '1' : '0') + '" class="ev-ban muted" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:.1rem .4rem;cursor:pointer;font-size:.75rem;margin-right:.25rem">' + (r.isBanned ? t('ev.regs.unban') : t('ev.regs.ban')) + '</button>' : '') + (IS_ADMIN && eventStatus !== 'locked' ? '<button data-mid="' + r.memberId + '" data-penalized="' + (r.isPenalized ? '1' : '0') + '" class="ev-penalize muted" title="' + t('active.penaltyBadge') + '" style="background:transparent;border:1px solid ' + (r.isPenalized ? '#f59e0b' : 'var(--border)') + ';color:' + (r.isPenalized ? '#f59e0b' : 'var(--muted)') + ';border-radius:3px;padding:.1rem .4rem;cursor:pointer;font-size:.75rem;font-weight:700;margin-right:.25rem">P</button>' : '') + (IS_ADMIN ? '<button data-mid="' + r.memberId + '" class="ev-unreg muted" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:.1rem .4rem;cursor:pointer;font-size:.75rem">×</button>' : '') + '</td>';
+        '<td class="ev-actions">' + (IS_ADMIN && eventStatus !== 'locked' ? '<button data-mid="' + r.memberId + '" data-banned="' + (r.isBanned ? '1' : '0') + '" class="ev-ban muted" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:.1rem .4rem;cursor:pointer;font-size:.75rem;margin-right:.25rem">' + (r.isBanned ? t('ev.regs.unban') : t('ev.regs.ban')) + '</button>' : '') + (IS_ADMIN && eventStatus !== 'locked' ? '<button data-mid="' + r.memberId + '" data-penalized="' + (r.isPenalized ? '1' : '0') + '" class="ev-penalize muted" title="' + t('active.penaltyBadge') + '" style="background:transparent;border:1px solid ' + (r.isPenalized ? '#f59e0b' : 'var(--border)') + ';color:' + (r.isPenalized ? '#f59e0b' : 'var(--muted)') + ';border-radius:3px;padding:.1rem .4rem;cursor:pointer;font-size:.75rem;font-weight:700;margin-right:.25rem">P</button>' : '') + (IS_ADMIN ? '<button data-mid="' + r.memberId + '" class="ev-unreg muted" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:.1rem .4rem;cursor:pointer;font-size:.75rem">×</button>' : '') + '</td>';
       tbody.appendChild(tr);
     });
     if (IS_ADMIN) {
@@ -574,34 +574,56 @@ export const CLIENT_ROSTER: string = `  function evRenderRegistrations(regs, eve
       .catch(function (err) { evSetStatus('ev-roster-status', t('common.error') + err.message, 'error'); });
   }
 
-  // Compact phone-friendly roster: mains only (no subs), two narrow columns
-  // that fit a single smartphone screenshot for sharing in game.
+  // Compact phone-friendly roster: mains only, one team at a time, full width —
+  // each row shows the full strategy-role name (including admin-typed custom
+  // roles), so nothing is ever truncated away. Screenshot one team, switch to
+  // the other, screenshot again.
+  var evCompactTeam = 'A';
+
   function evShowCompact() {
     if (!evCurrentEventId) return;
+    evRenderCompactTeam(evCompactTeam === 'B' ? 'B' : 'A');
     var modal = document.getElementById('ev-compact-modal');
+    if (modal) modal.style.display = '';
+  }
+
+  function evRenderCompactTeam(teamKey) {
+    evCompactTeam = teamKey;
     var titleEl = document.getElementById('ev-compact-title');
-    var teamsEl = document.getElementById('ev-compact-teams');
-    if (!modal || !titleEl || !teamsEl) return;
+    var listEl = document.getElementById('ev-compact-team');
+    var btnA = document.getElementById('ev-compact-team-a');
+    var btnB = document.getElementById('ev-compact-team-b');
+    if (!titleEl || !listEl) return;
     var kindLabel = evCurrentKind === 'desert' ? t('ev.kind.desert') : t('ev.kind.canyon');
-    titleEl.textContent = kindLabel + ' \u2014 ' + t('ev.roster.title');
+    var teamName = t(teamKey === 'B' ? 'ev.roster.teamB' : 'ev.roster.teamA');
+    titleEl.textContent = kindLabel + ' \u2014 ' + teamName;
     var roleSlots = evCurrentKind === 'desert' ? DS_ROLE_SLOTS : CANYON_ROLE_SLOTS;
-    var teamHtml = function (teamKey) {
-      var mains = evRosterState
-        .filter(function (r) { return r.team === teamKey && r.role === 'main'; })
-        .sort(function (a, b) { return b.power - a.power; });
-      var items = mains.map(function (row, i) {
-        var role = row.strategyRole || roleSlots[i] || 'main';
-        return '<div style="border-bottom:1px solid var(--border);padding:.14rem 0">' +
-          '<div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (i + 1) + '. ' + escapeHtml(row.memberName) + '</div>' +
-          '<div class="muted" style="font-size:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(role) + '</div>' +
-          '</div>';
-      }).join('');
-      if (!items) items = '<div class="muted" style="font-size:.78rem">' + t('ev.roster.compactEmpty') + '</div>';
-      var name = t(teamKey === 'A' ? 'ev.roster.teamA' : 'ev.roster.teamB');
-      return '<div><div style="font-weight:700;font-size:.85rem;margin-bottom:.15rem">' + name + '</div>' + items + '</div>';
-    };
-    teamsEl.innerHTML = teamHtml('A') + teamHtml('B');
-    modal.style.display = '';
+    var mains = evRosterState
+      .filter(function (r) { return r.team === teamKey && r.role === 'main'; })
+      .sort(function (a, b) { return b.power - a.power; });
+    var items = mains.map(function (row, i) {
+      var role = row.strategyRole || roleSlots[i] || 'main';
+      return '<div style="border-bottom:1px solid var(--border);padding:.17rem 0;font-size:.8rem;line-height:1.35">' +
+        '<span class="muted">' + (i + 1) + '.</span> ' +
+        '<strong>' + escapeHtml(row.memberName) + '</strong> ' +
+        '<span class="muted">\u2014 ' + escapeHtml(role) + '</span>' +
+        '</div>';
+    }).join('');
+    if (!items) items = '<div class="muted" style="font-size:.78rem">' + t('ev.roster.compactEmpty') + '</div>';
+    listEl.innerHTML = items;
+    // Toggle buttons: highlight the visible team. onclick assignment (not
+    // addEventListener) so re-renders never stack handlers.
+    var pairs = [[btnA, 'A'], [btnB, 'B']];
+    pairs.forEach(function (pair) {
+      var btn = pair[0];
+      var key = pair[1];
+      if (!btn) return;
+      btn.onclick = function () { evRenderCompactTeam(key); };
+      var selected = key === teamKey;
+      btn.style.background = selected ? 'var(--accent)' : 'transparent';
+      btn.style.color = selected ? '#0d1117' : 'var(--text)';
+      btn.style.borderColor = selected ? 'transparent' : 'var(--border)';
+    });
   }
 
   function evHideCompact() {

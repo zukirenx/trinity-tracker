@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import worker, { type Env, buildRosterPostMessages, getNextMondayWeekStart } from '../src/index';
 import { renderPage } from '../src/web/page';
+import { PAGE_STYLES } from '../src/web/page/styles';
+import { CLIENT_ROSTER } from '../src/web/page/client/roster';
 import { EventsStore, computeRosterHash } from '../src/eventsStore';
 import { DataStore } from '../src/storage';
 import type { Assignment } from '../src/eventsStore';
@@ -1377,6 +1379,31 @@ describe('Worker web routing', () => {
       ).text();
       expect(roBody).toContain('id="ev-compact"');
       expect(roBody).toContain('id="ev-compact-modal"');
+      // Compact view shows one team at a time (full-width rows, full role
+      // names) with an A/B toggle — no truncated side-by-side columns.
+      expect(adminBody).toContain('id="ev-compact-team"');
+      expect(adminBody).toContain('id="ev-compact-team-a"');
+      expect(adminBody).toContain('id="ev-compact-team-b"');
+      expect(roBody).toContain('id="ev-compact-team"');
+      expect(adminBody).not.toContain('ev-compact-legend');
+      expect(adminBody).not.toContain('COMPACT_ROLE_CODES');
+    });
+
+    it('registration admin actions stay on one row (Ban / P / × never stack)', () => {
+      expect(CLIENT_ROSTER).toContain('<td class="ev-actions">');
+      expect(PAGE_STYLES).toContain('.ev-actions, .ev-actions button');
+    });
+
+    it('events roster toolbar has phone rules for even button rows', async () => {
+      const env = makeEnv();
+      const html = await (
+        await worker.fetch(new Request('https://example.com/?token=secret-token'), env, ctx)
+      ).text();
+      expect(html).toContain('class="ev-toolbar"');
+      // Title + status go full-width, spacer hides, buttons pair up evenly.
+      expect(PAGE_STYLES).toContain('.ev-toolbar > h3, .ev-toolbar > #ev-roster-status');
+      expect(PAGE_STYLES).toContain('.ev-toolbar > .spacer');
+      expect(PAGE_STYLES).toContain('.ev-toolbar > button');
     });
 
     it('POST /api/settings returns 400 for invalid close time', async () => {
