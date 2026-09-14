@@ -231,7 +231,10 @@ export const en: Record<string, string> = {
       'settings.autoOpen': 'Auto-open registration',
       'settings.autoOpen.help': 'When enabled, Canyon Storm registration opens automatically every Friday at 00:00 UTC.',
       'settings.teamA': 'Team A', 'settings.teamB': 'Team B',
-      'settings.timeNote': 'Times are in game-server time (UTC+2, fixed offset).',
+      'settings.timeNote': 'All times are in server time (UTC-2).',
+      'settings.regCloseCanyon': 'Registration closes — Monday (server time)',
+      'settings.regCloseDesert': 'Registration closes — Wednesday (server time)',
+      'settings.regCloseHelp': 'Hour 0–23 in server time (UTC-2); the day is also counted in server time. Applies to newly created events only; already open events keep their deadline.',
       'settings.save.canyon': 'Save Canyon settings', 'settings.save.desert': 'Save Desert settings',
       'settings.saved': 'Saved.', 'settings.saving': 'Saving\u2026',
       'settings.openCanyonNow': 'Open Canyon registration now',
@@ -240,7 +243,7 @@ export const en: Record<string, string> = {
       'settings.opened': 'Registration open for week {week}.',
       'settings.alreadyOpen': 'Registration already open for week {week}.',
       'settings.timezone': 'Display timezone',
-      'settings.tz.note': 'Saved in your browser. Affects how event times are displayed.',
+      'settings.tz.note': 'Saved in your browser. Affects how event times are displayed. Times you set below are always in server time (UTC-2).',
       'settings.unsaved': '\u25cf Unsaved changes',
 };
 

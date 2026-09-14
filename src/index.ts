@@ -10,15 +10,20 @@ import {
   isValidSquadType,
   isValidTeamPref,
   isValidTimeSlot,
+  isValidCloseTime,
   resolveAnySlots,
   resolveAnyTeams,
   getSameTeamTime,
   computeEventTimestamp,
+  computeRegistrationCloseTimestamp,
+  serverWallFromGameSlot,
   computeRosterHash,
   VALID_CANYON_TIMES,
   VALID_DESERT_TIMES,
   CANYON_EVENT_DAY,
   DESERT_EVENT_DAY,
+  CANYON_CLOSE_DAY_OFFSET,
+  DESERT_CLOSE_DAY_OFFSET,
   type Assignment,
   type AssignmentInput,
   type AssignmentRole,
@@ -424,9 +429,11 @@ export default {
         console.log('[scheduled] Canyon auto-open disabled — skipping Canyon event creation');
         return;
       }
-      const mondayNoon = new Date(nextMonday);
-      mondayNoon.setUTCHours(12, 0, 0, 0);
-      const registrationClosesAt = mondayNoon.toISOString();
+      // Registration deadline: Monday of the event week at the admin-configured
+      // server-time hour (day and hour both counted in server time, UTC-2).
+      const registrationClosesAt = computeRegistrationCloseTimestamp(
+        weekStart, CANYON_CLOSE_DAY_OFFSET, settings.canyonCloseTime,
+      );
       const teamAStartsAt = computeEventTimestamp(weekStart, CANYON_EVENT_DAY, settings.canyonATime);
       const teamBStartsAt = computeEventTimestamp(weekStart, CANYON_EVENT_DAY, settings.canyonBTime);
       const notes = 'Canyon Storm - week ' + isoWeek + '-' + nextMonday.getUTCFullYear();
@@ -435,12 +442,14 @@ export default {
       });
       console.log(`[scheduled] Auto-created Canyon Storm event id=${created.id} weekStart=${weekStart} closes=${registrationClosesAt}`);
 
-      // Post registration-open announcement to Discord.
-      const aLabel = `Thursday ${settings.canyonATime} CET${settings.canyonATime === '03:00' ? ' (Fri in CET)' : ''}`;
-      const bLabel = `Thursday ${settings.canyonBTime} CET${settings.canyonBTime === '03:00' ? ' (Fri in CET)' : ''}`;
+      // Post registration-open announcement to Discord — all times in server time
+      // (UTC-2). In server time both Canyon slots fall on Thursday (the 03:00 game
+      // slot is Thursday 23:00 server), so no next-day qualifier is needed.
+      const aLabel = `Thursday ${serverWallFromGameSlot(settings.canyonATime)} server time`;
+      const bLabel = `Thursday ${serverWallFromGameSlot(settings.canyonBTime)} server time`;
       const dashLink = env.WORKER_URL && env.WEB_READONLY_TOKEN
         ? `\nDashboard: ${env.WORKER_URL}?token=${env.WEB_READONLY_TOKEN}` : '';
-      const postContent = `@everyone **Canyon Storm \u2014 Week ${isoWeek}** registration is now open!\nTeam A: ${aLabel}  |  Team B: ${bLabel}\nRegistration closes: Monday 12:00 UTC${dashLink}`;
+      const postContent = `@everyone **Canyon Storm \u2014 Week ${isoWeek}** registration is now open!\nTeam A: ${aLabel}  |  Team B: ${bLabel}\nRegistration closes: Monday ${settings.canyonCloseTime} server time${dashLink}`;
       ctx.waitUntil(
         fetch(`https://discord.com/api/v10/channels/${getRosterChannel(env)}/messages`, {
           method: 'POST',
@@ -451,10 +460,11 @@ export default {
       );
     } else if (day === 6) {
       // Saturday 0:00 UTC → Desert Storm for next week.
-      const wednesdayNoon = new Date(nextMonday);
-      wednesdayNoon.setUTCDate(nextMonday.getUTCDate() + 2); // Mon + 2 = Wed
-      wednesdayNoon.setUTCHours(12, 0, 0, 0);
-      const registrationClosesAt = wednesdayNoon.toISOString();
+      // Registration deadline: Wednesday of the event week at the admin-configured
+      // server-time hour (day and hour both counted in server time, UTC-2).
+      const registrationClosesAt = computeRegistrationCloseTimestamp(
+        weekStart, DESERT_CLOSE_DAY_OFFSET, settings.desertCloseTime,
+      );
       const teamAStartsAt = computeEventTimestamp(weekStart, DESERT_EVENT_DAY, settings.desertATime);
       const teamBStartsAt = computeEventTimestamp(weekStart, DESERT_EVENT_DAY, settings.desertBTime);
       const notes = 'Desert Storm - week ' + isoWeek + '-' + nextMonday.getUTCFullYear();
@@ -463,12 +473,16 @@ export default {
       });
       console.log(`[scheduled] Auto-created Desert Storm event id=${created.id} weekStart=${weekStart} closes=${registrationClosesAt}`);
 
-      // Post registration-open announcement to Discord.
-      const aLabel = `Friday ${settings.desertATime} CET${settings.desertATime === '03:00' ? ' (Sat in CET)' : ''}`;
-      const bLabel = `Friday ${settings.desertBTime} CET${settings.desertBTime === '03:00' ? ' (Sat in CET)' : ''}`;
+      // Post registration-open announcement to Discord — all times in server time
+      // (UTC-2). In server time all Desert slots fall on Friday (the 03:00 game
+      // slot is Friday 23:00 server), so no next-day qualifier is needed.
+      const aServer = serverWallFromGameSlot(settings.desertATime);
+      const bServer = serverWallFromGameSlot(settings.desertBTime);
+      const aLabel = `Friday ${aServer} server time`;
+      const bLabel = `Friday ${bServer} server time`;
       const dashLink = env.WORKER_URL && env.WEB_READONLY_TOKEN
         ? `\nDashboard: ${env.WORKER_URL}?token=${env.WEB_READONLY_TOKEN}` : '';
-      const postContent = `@everyone **Desert Storm \u2014 Week ${isoWeek}** registration is now open!\nTeam A (slot ${settings.desertATime}): ${aLabel}  |  Team B (slot ${settings.desertBTime}): ${bLabel}\nRegistration closes: Wednesday 12:00 UTC${dashLink}`;
+      const postContent = `@everyone **Desert Storm \u2014 Week ${isoWeek}** registration is now open!\nTeam A (slot ${aServer}): ${aLabel}  |  Team B (slot ${bServer}): ${bLabel}\nRegistration closes: Wednesday ${settings.desertCloseTime} server time${dashLink}`;
       ctx.waitUntil(
         fetch(`https://discord.com/api/v10/channels/${getRosterChannel(env)}/messages`, {
           method: 'POST',
@@ -1039,11 +1053,30 @@ async function handleWebApiPost(request: Request, env: Env): Promise<Response> {
         (patch as Record<string, unknown>)[field] = v;
       }
     }
+    // Registration-close times are hour-only 'HH:00' in server time (UTC-2):
+    // Monday for Canyon, Wednesday for Desert (day and hour counted in server time).
+    const closeTimeFields: Array<keyof EventsSettings> = ['canyonCloseTime', 'desertCloseTime'];
+    for (const field of closeTimeFields) {
+      if (field in body) {
+        const v = body[field];
+        if (!isValidCloseTime(v))
+          return jsonResponse({ error: `${field} must be HH:00 (hour only, 00:00-23:00, server time)` }, { status: 400 });
+        (patch as Record<string, unknown>)[field] = v;
+      }
+    }
 
-    await eventsStore.saveEventsSettings(patch);
+    try {
+      await eventsStore.saveEventsSettings(patch);
+    } catch (err: any) {
+      return jsonResponse({ error: err?.message ?? 'save failed' }, { status: 400 });
+    }
     const fullSettings = await eventsStore.getEventsSettings();
 
-    // Update open events immediately when schedule fields change.
+    // Update open events immediately when team-time fields change.
+    // Registration-close changes intentionally do NOT touch already open
+    // events: they keep their stored deadline, the new time applies only to
+    // newly created events. This avoids resurrecting (or prematurely
+    // closing) an open registration when the admin edits the default.
     const canyonTimeChanged = ['canyonATime', 'canyonBTime'].some(k => k in patch);
     const desertTimeChanged = ['desertATime', 'desertBTime'].some(k => k in patch);
     if (canyonTimeChanged) {
@@ -1092,9 +1125,9 @@ async function handleWebApiPost(request: Request, env: Env): Promise<Response> {
         }
         return jsonResponse({ ok: true, event: existing, alreadyOpen: true, weekStart });
       }
-      const mondayNoon = new Date(nextMonday);
-      mondayNoon.setUTCHours(12, 0, 0, 0);
-      const registrationClosesAt = mondayNoon.toISOString();
+      const registrationClosesAt = computeRegistrationCloseTimestamp(
+        weekStart, CANYON_CLOSE_DAY_OFFSET, settings.canyonCloseTime,
+      );
       const teamAStartsAt = computeEventTimestamp(weekStart, CANYON_EVENT_DAY, settings.canyonATime);
       const teamBStartsAt = computeEventTimestamp(weekStart, CANYON_EVENT_DAY, settings.canyonBTime);
       const isoWeek = getISOWeekNumber(nextMonday);

@@ -651,8 +651,8 @@ describe('Worker web routing', () => {
       expect(row).toBeTruthy();
       expect(row!.kind).toBe('desert');
       expect(row!.week_start).toBe('2026-06-01');
-      // Registration closes Wednesday 12:00 UTC of next week (Mon 2026-06-01 + 2d = Wed 2026-06-03)
-      expect(row!.registration_closes_at).toBe('2026-06-03T12:00:00.000Z');
+      // Registration closes Wednesday 12:00 server time = 14:00 UTC (Mon 2026-06-01 + 2d = Wed 2026-06-03)
+      expect(row!.registration_closes_at).toBe('2026-06-03T14:00:00.000Z');
       // Notes contain week number: next Monday 2026-06-01 is ISO week 23
       expect(row!.notes).toBe('Desert Storm - week 23-2026');
     });
@@ -671,8 +671,8 @@ describe('Worker web routing', () => {
       expect(row).toBeTruthy();
       expect(row!.kind).toBe('canyon');
       expect(row!.week_start).toBe('2026-06-01');
-      // Registration closes Monday 12:00 UTC of next week (2026-06-01)
-      expect(row!.registration_closes_at).toBe('2026-06-01T12:00:00.000Z');
+      // Registration closes Monday 12:00 server time = 14:00 UTC (2026-06-01)
+      expect(row!.registration_closes_at).toBe('2026-06-01T14:00:00.000Z');
       expect(row!.notes).toBe('Canyon Storm - week 23-2026');
     });
 
@@ -1046,6 +1046,8 @@ describe('Worker web routing', () => {
       expect(body.settings.canyonAutoOpen).toBe(true);
       expect(body.settings.canyonATime).toBe('16:00');
       expect(body.settings.desertATime).toBe('22:00');
+      expect(body.settings.canyonCloseTime).toBe('12:00');
+      expect(body.settings.desertCloseTime).toBe('12:00');
     });
 
     it('GET /api/settings returns 403 for readonly token', async () => {
@@ -1070,6 +1072,8 @@ describe('Worker web routing', () => {
             canyonBTime: '16:00',
             desertATime: '13:00',
             desertBTime: '22:00',
+            canyonCloseTime: '20:00',
+            desertCloseTime: '08:00',
           }),
         }),
         env,
@@ -1081,6 +1085,8 @@ describe('Worker web routing', () => {
       expect(body.settings.canyonAutoOpen).toBe(false);
       expect(body.settings.canyonATime).toBe('03:00');
       expect(body.settings.desertBTime).toBe('22:00');
+      expect(body.settings.canyonCloseTime).toBe('20:00');
+      expect(body.settings.desertCloseTime).toBe('08:00');
 
       // Verify GET returns updated values
       const res2 = await worker.fetch(
@@ -1091,6 +1097,8 @@ describe('Worker web routing', () => {
       const body2 = await res2.json() as { settings: Record<string, unknown> };
       expect(body2.settings.canyonAutoOpen).toBe(false);
       expect(body2.settings.canyonATime).toBe('03:00');
+      expect(body2.settings.canyonCloseTime).toBe('20:00');
+      expect(body2.settings.desertCloseTime).toBe('08:00');
     });
 
     it('POST /api/settings returns 400 for invalid time value', async () => {
@@ -1174,7 +1182,8 @@ describe('Worker web routing', () => {
       ).bind(expectedWeekStart).first<{ kind: string; week_start: string; status: string; registration_closes_at: string }>();
       expect(row).toBeTruthy();
       expect(row!.status).toBe('open');
-      expect(row!.registration_closes_at).toBe(`${expectedWeekStart}T12:00:00.000Z`);
+      // Default: Monday 12:00 server time = 14:00 UTC.
+      expect(row!.registration_closes_at).toBe(`${expectedWeekStart}T14:00:00.000Z`);
     });
 
     it('POST /api/events/open-canyon-now is idempotent when already open', async () => {
@@ -1323,6 +1332,161 @@ describe('Worker web routing', () => {
       ).text();
       expect(roBody).toContain('id="ev-compact"');
       expect(roBody).toContain('id="ev-compact-modal"');
+    });
+
+    it('POST /api/settings returns 400 for invalid close time', async () => {
+      const env = makeEnv();
+      for (const bad of [{ canyonCloseTime: '24:00' }, { desertCloseTime: 'nope' }, { canyonCloseTime: '12:0' }, { canyonCloseTime: '20:30' }, { desertCloseTime: '08:15' }]) {
+        const res = await worker.fetch(
+          new Request('https://example.com/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer secret-token' },
+            body: JSON.stringify(bad),
+          }),
+          env,
+          ctx,
+        );
+        expect(res.status).toBe(400);
+      }
+    });
+
+    it('scheduled Canyon creation uses the configured server-time close hour', async () => {
+      const env = makeEnv();
+      await env.DB.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:canyon_close_hour', '20:00')").run();
+      const event = {
+        scheduledTime: new Date('2026-05-29T00:00:00Z').getTime(),
+        cron: '0 0 * * FRI',
+      } as ScheduledEvent;
+      const posted: string[] = [];
+      const restore = stubFetchOk(posted);
+      try {
+        await worker.scheduled(event, env, ctx);
+      } finally {
+        restore();
+      }
+      const row = await env.DB.prepare(
+        "SELECT registration_closes_at FROM poc_events_event WHERE kind = 'canyon' AND week_start = '2026-06-01'",
+      ).first<{ registration_closes_at: string }>();
+      // Monday of event week at 20:00 server time = 22:00 UTC.
+      expect(row!.registration_closes_at).toBe('2026-06-01T22:00:00.000Z');
+      // Discord announcement is fully in server time (slots + close, no CET mix).
+      expect(posted.join('\n')).toContain('Registration closes: Monday 20:00 server time');
+      expect(posted.join('\n')).toContain('server time');
+      expect(posted.join('\n')).not.toContain('CET');
+      expect(posted.join('\n')).not.toContain('UTC');
+    });
+
+    it('scheduled Desert creation uses the configured server-time close hour', async () => {
+      const env = makeEnv();
+      await env.DB.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:desert_close_hour', '08:00')").run();
+      const event = {
+        scheduledTime: new Date('2026-05-30T00:00:00Z').getTime(),
+        cron: '0 0 * * SAT',
+      } as ScheduledEvent;
+      const posted: string[] = [];
+      const restore = stubFetchOk(posted);
+      try {
+        await worker.scheduled(event, env, ctx);
+      } finally {
+        restore();
+      }
+      const row = await env.DB.prepare(
+        "SELECT registration_closes_at FROM poc_events_event WHERE kind = 'desert' AND week_start = '2026-06-01'",
+      ).first<{ registration_closes_at: string }>();
+      // Wednesday of event week at 08:00 server time = 10:00 UTC.
+      expect(row!.registration_closes_at).toBe('2026-06-03T10:00:00.000Z');
+      expect(posted.join('\n')).toContain('Registration closes: Wednesday 08:00 server time');
+    });
+
+    it('scheduled Desert announcement shows slots in server time on Friday', async () => {
+      const env = makeEnv();
+      await env.DB.batch([
+        env.DB.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:desert_a_time', '22:00')"),
+        env.DB.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:desert_b_time', '13:00')"),
+      ]);
+      const event = {
+        scheduledTime: new Date('2026-05-30T00:00:00Z').getTime(),
+        cron: '0 0 * * SAT',
+      } as ScheduledEvent;
+      const posted: string[] = [];
+      const restore = stubFetchOk(posted);
+      try {
+        await worker.scheduled(event, env, ctx);
+      } finally {
+        restore();
+      }
+      // 22:00 game = Friday 18:00 server; 13:00 game = Friday 09:00 server.
+      const text = posted.join('\n');
+      expect(text).toContain('Friday 18:00 server time');
+      expect(text).toContain('Friday 09:00 server time');
+    });
+
+    it('changing close-time settings does not rewrite already open events', async () => {
+      const env = makeEnv();
+      await env.DB.prepare(
+        "INSERT INTO poc_events_event (kind, week_start, status, registration_closes_at) VALUES ('canyon', '2026-06-01', 'open', '2026-06-01T12:00:00.000Z')",
+      ).run();
+      const res = await worker.fetch(
+        new Request('https://example.com/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer secret-token' },
+          body: JSON.stringify({ canyonCloseTime: '20:00' }),
+        }),
+        env,
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      const row = await env.DB.prepare(
+        "SELECT registration_closes_at FROM poc_events_event WHERE kind = 'canyon' AND week_start = '2026-06-01'",
+      ).first<{ registration_closes_at: string }>();
+      // Already open event keeps its stored deadline; the new default applies to future events only.
+      expect(row!.registration_closes_at).toBe('2026-06-01T12:00:00.000Z');
+    });
+
+    it('POST /api/events/open-canyon-now uses the configured server-time close hour', async () => {
+      const env = makeEnv();
+      await env.DB.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:canyon_close_hour', '18:00')").run();
+      const res = await worker.fetch(
+        new Request('https://example.com/api/events/open-canyon-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer secret-token' },
+          body: JSON.stringify({}),
+        }),
+        env,
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as { ok: boolean; weekStart: string };
+      const row = await env.DB.prepare(
+        "SELECT registration_closes_at FROM poc_events_event WHERE kind = 'canyon' AND week_start = ?",
+      ).bind(body.weekStart).first<{ registration_closes_at: string }>();
+      // Monday 18:00 server time = 20:00 UTC.
+      expect(row!.registration_closes_at).toBe(`${body.weekStart}T20:00:00.000Z`);
+    });
+
+    it('settings page is fully in server time with hour-only close selects', async () => {
+      const env = makeEnv();
+      const res = await worker.fetch(
+        new Request('https://example.com/?token=secret-token'),
+        env,
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('id="settings-canyon-close-time"');
+      expect(html).toContain('id="settings-desert-close-time"');
+      expect(html).toContain('data-i18n="settings.regCloseCanyon"');
+      expect(html).toContain('data-i18n="settings.regCloseDesert"');
+      expect(html).toContain('data-i18n="settings.regCloseHelp"');
+      // Hour-only selects (00–23 as 'HH:00'), no minute-granularity time inputs.
+      expect(html).not.toContain('type="time"');
+      expect(html).toContain('<option value="00:00">00</option>');
+      expect(html).toContain('<option value="23:00">23</option>');
+      // Match slots shown in server time (values stay canonical game times).
+      expect(html).toContain('<option value="16:00">12:00</option>');
+      expect(html).toContain('<option value="03:00">23:00</option>');
+      expect(html).toContain('<option value="22:00">18:00</option>');
+      expect(html).toContain('<option value="13:00">09:00</option>');
     });
   });
 

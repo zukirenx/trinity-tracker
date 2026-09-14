@@ -39,6 +39,8 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
     if (catEl) catEl.addEventListener('change', markCanyonUnsaved);
     var cbtEl = document.getElementById('settings-canyon-b-time');
     if (cbtEl) cbtEl.addEventListener('change', markCanyonUnsaved);
+    var cctEl = document.getElementById('settings-canyon-close-time');
+    if (cctEl) cctEl.addEventListener('change', markCanyonUnsaved);
     var canyonSave = document.getElementById('settings-canyon-save');
     if (canyonSave) canyonSave.addEventListener('click', function () {
       var autoOpen = document.getElementById('settings-canyon-auto-open');
@@ -46,6 +48,7 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
         canyonAutoOpen: autoOpen ? autoOpen.checked : true,
         canyonATime: (document.getElementById('settings-canyon-a-time') || {value: '16:00'}).value,
         canyonBTime: (document.getElementById('settings-canyon-b-time') || {value: '16:00'}).value,
+        canyonCloseTime: (document.getElementById('settings-canyon-close-time') || {value: '12:00'}).value,
       }, 'settings-canyon-status');
     });
     var canyonOpenNow = document.getElementById('settings-canyon-open-now');
@@ -87,11 +90,14 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
     if (datEl) datEl.addEventListener('change', markDesertUnsaved);
     var dbtEl = document.getElementById('settings-desert-b-time');
     if (dbtEl) dbtEl.addEventListener('change', markDesertUnsaved);
+    var dctEl = document.getElementById('settings-desert-close-time');
+    if (dctEl) dctEl.addEventListener('change', markDesertUnsaved);
     var desertSave = document.getElementById('settings-desert-save');
     if (desertSave) desertSave.addEventListener('click', function () {
       settingsSave({
         desertATime: (document.getElementById('settings-desert-a-time') || {value: '22:00'}).value,
         desertBTime: (document.getElementById('settings-desert-b-time') || {value: '13:00'}).value,
+        desertCloseTime: (document.getElementById('settings-desert-close-time') || {value: '12:00'}).value,
       }, 'settings-desert-status');
     });
   }
@@ -106,8 +112,10 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
         if (caoEl) caoEl.checked = Boolean(s.canyonAutoOpen);
         settingsSetValue('settings-canyon-a-time', s.canyonATime);
         settingsSetValue('settings-canyon-b-time', s.canyonBTime);
+        settingsSetValue('settings-canyon-close-time', s.canyonCloseTime || '12:00');
         settingsSetValue('settings-desert-a-time', s.desertATime);
         settingsSetValue('settings-desert-b-time', s.desertBTime);
+        settingsSetValue('settings-desert-close-time', s.desertCloseTime || '12:00');
       })
       .catch(function (err) { console.error('Settings load error:', err); });
   }
@@ -132,8 +140,10 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
             if (caoEl) caoEl.checked = Boolean(s.canyonAutoOpen);
             settingsSetValue('settings-canyon-a-time', s.canyonATime);
             settingsSetValue('settings-canyon-b-time', s.canyonBTime);
+            settingsSetValue('settings-canyon-close-time', s.canyonCloseTime || '12:00');
             settingsSetValue('settings-desert-a-time', s.desertATime);
             settingsSetValue('settings-desert-b-time', s.desertBTime);
+            settingsSetValue('settings-desert-close-time', s.desertCloseTime || '12:00');
           }
         } else {
           if (statusEl) statusEl.textContent = t('common.error') + (data.error || 'unknown error');

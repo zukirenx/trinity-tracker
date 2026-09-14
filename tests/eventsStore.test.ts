@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { DataStore } from '../src/storage';
-import { EventsStore, computeRosterHash, resolveAnySlots, resolveAnyTeams, type Assignment, type Registration, type TimeSlot } from '../src/eventsStore';
+import { EventsStore, computeRosterHash, computeRegistrationCloseTimestamp, isValidCloseTime, migrateLegacyCloseTimeToServer, serverWallFromGameSlot, resolveAnySlots, resolveAnyTeams, CANYON_CLOSE_DAY_OFFSET, DESERT_CLOSE_DAY_OFFSET, type Assignment, type Registration, type TimeSlot } from '../src/eventsStore';
 import { createD1Mock } from './d1-mock';
 
 async function addMemberId(data: DataStore, db: D1Database, name: string): Promise<number> {
@@ -1005,6 +1005,119 @@ describe('computeRosterHash', () => {
     expect(await store.getRosterPostedHash(ev.id)).toBeNull();
     await store.setRosterPostedHash(ev.id, 'abc123');
     expect(await store.getRosterPostedHash(ev.id)).toBe('abc123');
+  });
+});
+
+describe('registration close-time settings (server time, hour-only)', () => {
+  it('isValidCloseTime accepts hour-only HH:00 and rejects minutes/garbage', () => {
+    expect(isValidCloseTime('00:00')).toBe(true);
+    expect(isValidCloseTime('12:00')).toBe(true);
+    expect(isValidCloseTime('23:00')).toBe(true);
+    expect(isValidCloseTime('08:00')).toBe(true);
+    expect(isValidCloseTime('08:30')).toBe(false);
+    expect(isValidCloseTime('23:59')).toBe(false);
+    expect(isValidCloseTime('24:00')).toBe(false);
+    expect(isValidCloseTime('12:0')).toBe(false);
+    expect(isValidCloseTime('12')).toBe(false);
+    expect(isValidCloseTime('')).toBe(false);
+    expect(isValidCloseTime(null)).toBe(false);
+    expect(isValidCloseTime(undefined)).toBe(false);
+    expect(isValidCloseTime(1200)).toBe(false);
+  });
+
+  it('computeRegistrationCloseTimestamp counts day+hour in server time (UTC-2 → UTC +2h)', () => {
+    // weekStart 2026-06-01 is a Monday. Server 12:00 = 14:00 UTC same day.
+    expect(computeRegistrationCloseTimestamp('2026-06-01', CANYON_CLOSE_DAY_OFFSET, '12:00'))
+      .toBe('2026-06-01T14:00:00.000Z');
+    expect(computeRegistrationCloseTimestamp('2026-06-01', DESERT_CLOSE_DAY_OFFSET, '12:00'))
+      .toBe('2026-06-03T14:00:00.000Z');
+    expect(computeRegistrationCloseTimestamp('2026-06-01', CANYON_CLOSE_DAY_OFFSET, '20:00'))
+      .toBe('2026-06-01T22:00:00.000Z');
+    // Server 23:00 overflows into the next UTC day — the instant is what matters.
+    expect(computeRegistrationCloseTimestamp('2026-06-01', CANYON_CLOSE_DAY_OFFSET, '23:00'))
+      .toBe('2026-06-02T01:00:00.000Z');
+    // Server midnight Monday = 02:00 UTC Monday (same calendar day, no ambiguity).
+    expect(computeRegistrationCloseTimestamp('2026-06-01', CANYON_CLOSE_DAY_OFFSET, '00:00'))
+      .toBe('2026-06-01T02:00:00.000Z');
+  });
+
+  it('serverWallFromGameSlot maps game slots (UTC+2) to server walls (UTC-2)', () => {
+    expect(serverWallFromGameSlot('16:00')).toBe('12:00');
+    expect(serverWallFromGameSlot('03:00')).toBe('23:00');
+    expect(serverWallFromGameSlot('13:00')).toBe('09:00');
+    expect(serverWallFromGameSlot('22:00')).toBe('18:00');
+  });
+
+  it('migrateLegacyCloseTimeToServer preserves the instant (UTC − 2h, truncated to hour)', () => {
+    expect(migrateLegacyCloseTimeToServer('12:00')).toBe('10:00');
+    expect(migrateLegacyCloseTimeToServer('00:00')).toBe('22:00');
+    expect(migrateLegacyCloseTimeToServer('08:30')).toBe('06:00');
+    expect(migrateLegacyCloseTimeToServer('02:15')).toBe('00:00');
+  });
+
+  it('getEventsSettings defaults close times to 12:00 server time', async () => {
+    const db = createD1Mock();
+    const store = new EventsStore(db);
+    const s = await store.getEventsSettings();
+    expect(s.canyonCloseTime).toBe('12:00');
+    expect(s.desertCloseTime).toBe('12:00');
+  });
+
+  it('saveEventsSettings round-trips hour-only server close times', async () => {
+    const db = createD1Mock();
+    const store = new EventsStore(db);
+    await store.saveEventsSettings({ canyonCloseTime: '20:00', desertCloseTime: '08:00' });
+    const s = await store.getEventsSettings();
+    expect(s.canyonCloseTime).toBe('20:00');
+    expect(s.desertCloseTime).toBe('08:00');
+  });
+
+  it('saveEventsSettings rejects minute-granularity and garbage close times', async () => {
+    const db = createD1Mock();
+    const store = new EventsStore(db);
+    await expect(store.saveEventsSettings({ canyonCloseTime: '24:00' })).rejects.toThrow();
+    await expect(store.saveEventsSettings({ desertCloseTime: 'nope' })).rejects.toThrow();
+    await expect(store.saveEventsSettings({ canyonCloseTime: '20:30' })).rejects.toThrow();
+  });
+
+  it('migrates legacy UTC close values to instant-preserving server hours', async () => {
+    const db = createD1Mock();
+    const store = new EventsStore(db);
+    // Legacy keys from before the server-time switch (UTC 'HH:MM').
+    await db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:canyon_close_time', '12:00')").run();
+    await db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:desert_close_time', '08:30')").run();
+    const s = await store.getEventsSettings();
+    // 12:00 UTC = 10:00 server; 08:30 UTC → 06:00 server (truncated to hour).
+    expect(s.canyonCloseTime).toBe('10:00');
+    expect(s.desertCloseTime).toBe('06:00');
+  });
+
+  it('new server-time keys win over legacy UTC keys', async () => {
+    const db = createD1Mock();
+    const store = new EventsStore(db);
+    await db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:canyon_close_time', '12:00')").run();
+    await store.saveEventsSettings({ canyonCloseTime: '20:00' });
+    const s = await store.getEventsSettings();
+    expect(s.canyonCloseTime).toBe('20:00');
+  });
+
+  it('saving removes the legacy UTC keys (one-way migration)', async () => {
+    const db = createD1Mock();
+    const store = new EventsStore(db);
+    await db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:canyon_close_time', '12:00')").run();
+    await store.saveEventsSettings({ canyonCloseTime: '20:00' });
+    const row = await db.prepare("SELECT value FROM metadata WHERE key = 'setting:canyon_close_time'").first<{ value: string }>();
+    expect(row).toBeNull();
+  });
+
+  it('falls back to 12:00 when stored metadata is invalid', async () => {
+    const db = createD1Mock();
+    const store = new EventsStore(db);
+    await db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:canyon_close_hour', 'bogus')").run();
+    await db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('setting:desert_close_hour', '99:99')").run();
+    const s = await store.getEventsSettings();
+    expect(s.canyonCloseTime).toBe('12:00');
+    expect(s.desertCloseTime).toBe('12:00');
   });
 });
 

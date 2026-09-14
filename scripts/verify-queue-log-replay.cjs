@@ -5,16 +5,23 @@
 // from_pos must exactly match the actual position of its member at that
 // timestamp), and asserts the final state equals the current live queue.
 //
-// Run via: node scripts/verify-queue-log-replay.cjs
+// Run via: node scripts/verify-queue-log-replay.cjs [--config wrangler.local.toml]
 // Wired into `npm run deploy` so that a non-replayable log blocks deploys.
 //
 // Exits non-zero on any inconsistency.
 
 const { execSync } = require('node:child_process');
 
+// Optional `--config <path>` passthrough for setups where the real D1 id
+// lives in a gitignored local config (see `npm run deploy:local`).
+const configFlag = (() => {
+  const i = process.argv.indexOf('--config');
+  return i >= 0 && process.argv[i + 1] ? ' --config ' + process.argv[i + 1] : '';
+})();
+
 function runD1(sql) {
   const out = execSync(
-    'npx wrangler d1 execute lw-rewards --remote --json -y --command ' + JSON.stringify(sql),
+    'npx wrangler d1 execute lw-rewards --remote --json -y' + configFlag + ' --command ' + JSON.stringify(sql),
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
   );
   return JSON.parse(out.slice(out.indexOf('[')))[0].results;

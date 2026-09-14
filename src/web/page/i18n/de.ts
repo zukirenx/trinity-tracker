@@ -231,7 +231,10 @@ export const de: Record<string, string> = {
       'settings.autoOpen': 'Anmeldung automatisch \u00f6ffnen',
       'settings.autoOpen.help': 'Wenn aktiviert, wird die Canyon Storm Anmeldung jeden Freitag um 00:00 UTC automatisch ge\u00f6ffnet.',
       'settings.teamA': 'Team A', 'settings.teamB': 'Team B',
-      'settings.timeNote': 'Zeiten in Spielserver-Zeit (UTC+2, fester Offset).',
+      'settings.timeNote': 'Alle Zeiten in Serverzeit (UTC-2).',
+      'settings.regCloseCanyon': 'Anmeldeschluss — Montag (Serverzeit)',
+      'settings.regCloseDesert': 'Anmeldeschluss — Mittwoch (Serverzeit)',
+      'settings.regCloseHelp': 'Stunde 0–23 in Serverzeit (UTC-2); auch der Tag z\u00e4hlt in Serverzeit. Gilt nur f\u00fcr neu erstellte Events; bereits offene Events behalten ihre Frist.',
       'settings.save.canyon': 'Canyon speichern', 'settings.save.desert': 'Desert speichern',
       'settings.saved': 'Gespeichert.', 'settings.saving': 'Speichern\u2026',
       'settings.openCanyonNow': 'Canyon-Anmeldung jetzt \u00f6ffnen',
@@ -240,7 +243,7 @@ export const de: Record<string, string> = {
       'settings.opened': 'Anmeldung f\u00fcr Woche {week} ge\u00f6ffnet.',
       'settings.alreadyOpen': 'Anmeldung f\u00fcr Woche {week} bereits ge\u00f6ffnet.',
       'settings.timezone': 'Anzeigetimezone',
-      'settings.tz.note': 'Im Browser gespeichert. Beeinflusst die Anzeige von Event-Zeiten.',
+      'settings.tz.note': 'Im Browser gespeichert. Beeinflusst die Anzeige der Event-Zeiten. Die unten eingestellten Zeiten sind immer in Serverzeit (UTC-2).',
       'settings.unsaved': '\u25cf Nicht gespeicherte \u00c4nderungen',
 };
 

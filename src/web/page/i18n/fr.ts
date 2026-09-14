@@ -231,7 +231,10 @@ export const fr: Record<string, string> = {
       'settings.autoOpen': 'Ouverture auto des inscriptions',
       'settings.autoOpen.help': 'Si activ\u00e9, les inscriptions Canyon Storm s\u2019ouvrent automatiquement chaque vendredi \u00e0 00:00 UTC.',
       'settings.teamA': '\u00c9quipe A', 'settings.teamB': '\u00c9quipe B',
-      'settings.timeNote': 'Heures en temps serveur (UTC+2, d\u00e9calage fixe).',
+      'settings.timeNote': 'Toutes les heures sont \u00e0 l\u2019heure du serveur (UTC-2).',
+      'settings.regCloseCanyon': 'Fin des inscriptions — lundi (heure serveur)',
+      'settings.regCloseDesert': 'Fin des inscriptions — mercredi (heure serveur)',
+      'settings.regCloseHelp': 'Heure 0–23 en heure serveur (UTC-2) ; le jour est aussi compt\u00e9 en heure serveur. S\u2019applique uniquement aux \u00e9v\u00e9nements cr\u00e9\u00e9s ensuite ; les \u00e9v\u00e9nements d\u00e9j\u00e0 ouverts gardent leur limite.',
       'settings.save.canyon': 'Enregistrer (Canyon)', 'settings.save.desert': 'Enregistrer (Desert)',
       'settings.saved': 'Enregistr\u00e9.', 'settings.saving': 'Enregistrement\u2026',
       'settings.openCanyonNow': 'Ouvrir les inscriptions Canyon maintenant',
@@ -240,7 +243,7 @@ export const fr: Record<string, string> = {
       'settings.opened': 'Inscriptions ouvertes pour la semaine {week}.',
       'settings.alreadyOpen': 'Inscriptions d\u00e9j\u00e0 ouvertes pour la semaine {week}.',
       'settings.timezone': 'Fuseau horaire d\u2019affichage',
-      'settings.tz.note': 'Enregistr\u00e9 dans votre navigateur. Affecte l\u2019affichage des horaires d\u2019\u00e9v\u00e9nements.',
+      'settings.tz.note': 'Enregistr\u00e9 dans votre navigateur. Affecte l\u2019affichage des horaires. Les heures r\u00e9gl\u00e9es ci-dessous sont toujours en heure serveur (UTC-2).',
       'settings.unsaved': '\u25cf Modifications non enregistr\u00e9es',
 };
 

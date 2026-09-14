@@ -16,3 +16,4 @@ backups/
 .vscode/
 .idea/
 *.local
+wrangler.local.toml

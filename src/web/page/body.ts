@@ -1,5 +1,18 @@
 // Dashboard body markup: header, tabs, panels, footer.
 // adminOnlyAttr is empty for admins and carries the hidden attribute for readonly users.
+//
+// All times in Settings are server time (UTC-2, fixed): match-slot selects keep
+// canonical game-time values (UTC+2 fixed) but show server-time labels; the
+// registration-close selects are hour-only server-time values ('HH:00').
+function renderCloseHourOptions(selected: string): string {
+  let out = '';
+  for (let h = 0; h < 24; h++) {
+    const v = String(h).padStart(2, '0') + ':00';
+    out += '<option value="' + v + '"' + (v === selected ? ' selected' : '') + '>' + String(h).padStart(2, '0') + '</option>';
+  }
+  return out;
+}
+
 export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): string {
   const { isAdmin, adminOnlyAttr } = opts;
   return `<header>
@@ -455,8 +468,8 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
         <span style="font-size:.8rem;color:var(--muted)" data-i18n="settings.teamA">Team A</span>
         <div style="display:flex;gap:.4rem">
           <select id="settings-canyon-a-time" style="flex:1;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem;font-size:.9rem">
-            <option value="16:00">16:00</option>
-            <option value="03:00">03:00</option>
+            <option value="16:00">12:00</option>
+            <option value="03:00">23:00</option>
           </select>
         </div>
       </div>
@@ -464,13 +477,18 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
         <span style="font-size:.8rem;color:var(--muted)" data-i18n="settings.teamB">Team B</span>
         <div style="display:flex;gap:.4rem">
           <select id="settings-canyon-b-time" style="flex:1;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem;font-size:.9rem">
-            <option value="16:00">16:00</option>
-            <option value="03:00">03:00</option>
+            <option value="16:00">12:00</option>
+            <option value="03:00">23:00</option>
           </select>
         </div>
       </div>
     </div>
-    <p class="muted" style="margin:0;font-size:.78rem" data-i18n="settings.timeNote">Times are in game-server time (UTC+2, fixed offset).</p>
+    <p class="muted" style="margin:0;font-size:.78rem" data-i18n="settings.timeNote">All times are in server time (UTC-2).</p>
+    <div style="display:flex;flex-direction:column;gap:.3rem;border-top:1px solid var(--border);padding-top:.65rem">
+      <span style="font-size:.8rem;color:var(--muted)" data-i18n="settings.regCloseCanyon">Registration closes — Monday (server time)</span>
+      <select id="settings-canyon-close-time" style="max-width:10rem;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem;font-size:.9rem">${renderCloseHourOptions('12:00')}</select>
+      <p class="muted" style="margin:0;font-size:.78rem" data-i18n="settings.regCloseHelp">Hour 0–23 in server time (UTC-2); the day is also counted in server time. Applies to newly created events only; already open events keep their deadline.</p>
+    </div>
     <div style="display:flex;align-items:center;gap:.75rem">
       <button id="settings-canyon-save" style="background:var(--accent);border:none;color:#0d1117;border-radius:4px;padding:.4rem .9rem;cursor:pointer;font-weight:600" data-i18n="settings.save.canyon">Save Canyon settings</button>
       <span id="settings-canyon-status" class="muted" style="font-size:.85rem"></span>
@@ -491,9 +509,9 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
         <span style="font-size:.8rem;color:var(--muted)" data-i18n="settings.teamA">Team A</span>
         <div style="display:flex;gap:.4rem">
           <select id="settings-desert-a-time" style="flex:1;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem;font-size:.9rem">
-            <option value="22:00">22:00</option>
-            <option value="13:00">13:00</option>
-            <option value="03:00">03:00</option>
+            <option value="22:00">18:00</option>
+            <option value="13:00">09:00</option>
+            <option value="03:00">23:00</option>
           </select>
         </div>
       </div>
@@ -501,14 +519,19 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
         <span style="font-size:.8rem;color:var(--muted)" data-i18n="settings.teamB">Team B</span>
         <div style="display:flex;gap:.4rem">
           <select id="settings-desert-b-time" style="flex:1;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem;font-size:.9rem">
-            <option value="22:00">22:00</option>
-            <option value="13:00">13:00</option>
-            <option value="03:00">03:00</option>
+            <option value="22:00">18:00</option>
+            <option value="13:00">09:00</option>
+            <option value="03:00">23:00</option>
           </select>
         </div>
       </div>
     </div>
-    <p class="muted" style="margin:0;font-size:.78rem" data-i18n="settings.timeNote">Times are in game-server time (UTC+2, fixed offset).</p>
+    <p class="muted" style="margin:0;font-size:.78rem" data-i18n="settings.timeNote">All times are in server time (UTC-2).</p>
+    <div style="display:flex;flex-direction:column;gap:.3rem;border-top:1px solid var(--border);padding-top:.65rem">
+      <span style="font-size:.8rem;color:var(--muted)" data-i18n="settings.regCloseDesert">Registration closes — Wednesday (server time)</span>
+      <select id="settings-desert-close-time" style="max-width:10rem;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem;font-size:.9rem">${renderCloseHourOptions('12:00')}</select>
+      <p class="muted" style="margin:0;font-size:.78rem" data-i18n="settings.regCloseHelp">Hour 0–23 in server time (UTC-2); the day is also counted in server time. Applies to newly created events only; already open events keep their deadline.</p>
+    </div>
     <div style="display:flex;align-items:center;gap:.75rem">
       <button id="settings-desert-save" style="background:var(--accent);border:none;color:#0d1117;border-radius:4px;padding:.4rem .9rem;cursor:pointer;font-weight:600" data-i18n="settings.save.desert">Save Desert settings</button>
       <span id="settings-desert-status" class="muted" style="font-size:.85rem"></span>

@@ -88,10 +88,67 @@ export interface EventsSettings {
   canyonBTime: string;
   desertATime: string; // '13:00' | '22:00' | '03:00' (CET)
   desertBTime: string;
+  canyonCloseTime: string; // 'HH:00', hour-only wall time in SERVER time — Monday of the event week
+  desertCloseTime: string; // 'HH:00', hour-only wall time in SERVER time — Wednesday of the event week
 }
 
 export const VALID_CANYON_TIMES: readonly string[] = ['16:00', '03:00'];
 export const VALID_DESERT_TIMES: readonly string[] = ['13:00', '22:00', '03:00'];
+
+/**
+ * Single timezone for everything in Settings: game-server time, UTC-2, fixed
+ * (no DST, no ambiguity about which calendar day an hour belongs to).
+ * Match slots are stored canonically as game times (UTC+2 fixed) but presented
+ * in Settings as their server-time equivalents; registration-close hours are
+ * stored directly as server-time wall hours.
+ */
+export const SERVER_TZ_LABEL = 'server time (UTC-2)';
+/** Server (UTC-2) wall equivalents of the canonical game slots (UTC+2 fixed): game − 4 h. */
+export const GAME_SLOT_TO_SERVER: Readonly<Record<string, string>> = {
+  '16:00': '12:00',
+  '03:00': '23:00',
+  '13:00': '09:00',
+  '22:00': '18:00',
+};
+
+/** Registration closes Monday / Wednesday 12:00 server time by default. */
+export const DEFAULT_CANYON_CLOSE_TIME = '12:00';
+export const DEFAULT_DESERT_CLOSE_TIME = '12:00';
+
+/** Day offsets from weekStart (Monday) for the registration deadline (server days). */
+export const CANYON_CLOSE_DAY_OFFSET = 0; // Monday
+export const DESERT_CLOSE_DAY_OFFSET = 2; // Wednesday
+
+/** Hour-only close times: 'HH:00', 00–23, in server time. */
+const CLOSE_HOUR_RE = /^([01]\d|2[0-3]):00$/;
+/** Legacy (UTC, minute-granularity) close values from before the server-time switch. */
+const LEGACY_CLOSE_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function isValidCloseTime(v: unknown): v is string {
+  return typeof v === 'string' && CLOSE_HOUR_RE.test(v);
+}
+
+/**
+ * Convert a legacy UTC 'HH:MM' close value to the instant-preserving server-time
+ * hour ('HH:00'): server = UTC − 2 h, minutes truncated to hour granularity.
+ * E.g. '12:00' UTC → '10:00' server; '00:30' UTC → '22:00' server (previous day's
+ * 22:00 server = 00:00 UTC, so the 00:30 deadline moves ≤1 h earlier — acceptable
+ * for a deprecated one-way migration of a days-old setting).
+ */
+export function migrateLegacyCloseTimeToServer(utcHHMM: string): string {
+  const h = Number(utcHHMM.slice(0, 2));
+  return `${String((h - 2 + 24) % 24).padStart(2, '0')}:00`;
+}
+
+/**
+ * Map a canonical game slot ('HH:MM', UTC+2 fixed) to its server-time (UTC-2)
+ * wall equivalent for display in Settings and Discord posts. Game − 4 h.
+ */
+export function serverWallFromGameSlot(gameTimeHHMM: string): string {
+  const h = Number(gameTimeHHMM.slice(0, 2));
+  const m = gameTimeHHMM.slice(3, 5);
+  return `${String((h - 4 + 24) % 24).padStart(2, '0')}:${m}`;
+}
 
 /** Canyon Storm always plays on Thursday (Mon = 0 … Sun = 6). */
 export const CANYON_EVENT_DAY = 3;
@@ -147,6 +204,29 @@ export function computeEventTimestamp(
   const d = new Date(weekStartIso + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + utcDay);
   d.setUTCHours(h - 2, m, 0, 0); // CET (UTC+2) → UTC: subtract 2 h
+  return d.toISOString();
+}
+
+/**
+ * Compute the UTC ISO timestamp for a registration deadline.
+ *
+ * weekStartIso is the Monday (YYYY-MM-DD) of the event week, dayOffset is 0
+ * for Monday (Canyon) or 2 for Wednesday (Desert), and serverTimeHHMM is an
+ * hour-only 'HH:00' wall time in SERVER time (UTC-2 fixed). Both the day and
+ * the hour are counted in server time, so there is never ambiguity about
+ * which calendar day an early-morning hour belongs to.
+ * Server → UTC is +2 h (setUTCHours overflow into the next UTC day is fine —
+ * the instant is what auto-lock compares).
+ */
+export function computeRegistrationCloseTimestamp(
+  weekStartIso: string,
+  dayOffset: number,
+  serverTimeHHMM: string,
+): string {
+  const h = Number(serverTimeHHMM.slice(0, 2));
+  const d = new Date(weekStartIso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + dayOffset);
+  d.setUTCHours(h + 2, 0, 0, 0); // server (UTC-2) → UTC: add 2 h
   return d.toISOString();
 }
 
@@ -1129,6 +1209,24 @@ export class EventsStore {
   // ── Settings ──────────────────────────────────────────────────────────────
   // Persisted in the metadata table with a 'setting:' key prefix.
 
+  /** Resolve a stored close value: the new hour-only server key wins; a legacy
+   * UTC 'HH:MM' key is migrated one-way (instant-preserving); else default.
+   * The key name disambiguates: a legacy key is always UTC, even when its value
+   * happens to look hour-only (e.g. '12:00' UTC → '10:00' server). */
+  private resolveCloseTime(
+    stored: string | undefined,
+    legacyStored: string | undefined,
+    fallback: string,
+  ): string {
+    if (stored !== undefined) {
+      return isValidCloseTime(stored) ? stored : fallback;
+    }
+    if (legacyStored !== undefined && LEGACY_CLOSE_TIME_RE.test(legacyStored)) {
+      return migrateLegacyCloseTimeToServer(legacyStored);
+    }
+    return fallback;
+  }
+
   async getEventsSettings(): Promise<EventsSettings> {
     const keys = [
       'setting:canyon_auto_open',
@@ -1136,6 +1234,12 @@ export class EventsStore {
       'setting:canyon_b_time',
       'setting:desert_a_time',
       'setting:desert_b_time',
+      'setting:canyon_close_hour',
+      'setting:desert_close_hour',
+      // Legacy keys (UTC 'HH:MM') from before the server-time switch — read for
+      // one-way migration only, never written anymore.
+      'setting:canyon_close_time',
+      'setting:desert_close_time',
     ];
     const rows = await this.db
       .prepare(`SELECT key, value FROM metadata WHERE key IN (${keys.map(() => '?').join(',')})`)
@@ -1148,6 +1252,16 @@ export class EventsStore {
       canyonBTime: m.get('setting:canyon_b_time') ?? '16:00',
       desertATime: m.get('setting:desert_a_time') ?? '22:00',
       desertBTime: m.get('setting:desert_b_time') ?? '13:00',
+      canyonCloseTime: this.resolveCloseTime(
+        m.get('setting:canyon_close_hour'),
+        m.get('setting:canyon_close_time'),
+        DEFAULT_CANYON_CLOSE_TIME,
+      ),
+      desertCloseTime: this.resolveCloseTime(
+        m.get('setting:desert_close_hour'),
+        m.get('setting:desert_close_time'),
+        DEFAULT_DESERT_CLOSE_TIME,
+      ),
     };
   }
 
@@ -1163,10 +1277,25 @@ export class EventsStore {
       pairs.push(['setting:desert_a_time', patch.desertATime]);
     if (patch.desertBTime !== undefined)
       pairs.push(['setting:desert_b_time', patch.desertBTime]);
+    if (patch.canyonCloseTime !== undefined) {
+      if (!isValidCloseTime(patch.canyonCloseTime)) throw new Error('invalid canyonCloseTime');
+      pairs.push(['setting:canyon_close_hour', patch.canyonCloseTime]);
+    }
+    if (patch.desertCloseTime !== undefined) {
+      if (!isValidCloseTime(patch.desertCloseTime)) throw new Error('invalid desertCloseTime');
+      pairs.push(['setting:desert_close_hour', patch.desertCloseTime]);
+    }
     if (pairs.length === 0) return;
     const stmts = pairs.map(([k, v]) =>
       this.db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').bind(k, v),
     );
+    // Drop legacy UTC keys once the server-time value is saved — migration is one-way.
+    if (patch.canyonCloseTime !== undefined) {
+      stmts.push(this.db.prepare("DELETE FROM metadata WHERE key = 'setting:canyon_close_time'"));
+    }
+    if (patch.desertCloseTime !== undefined) {
+      stmts.push(this.db.prepare("DELETE FROM metadata WHERE key = 'setting:desert_close_time'"));
+    }
     await this.db.batch(stmts);
   }
 

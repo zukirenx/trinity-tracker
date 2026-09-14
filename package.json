@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "npm run test && npm run verify:queue-log-replay && wrangler deploy",
+    "deploy:local": "npm run test && npm run verify:queue-log-replay:local && wrangler deploy --config wrangler.local.toml",
     "verify:queue-log-replay": "node scripts/verify-queue-log-replay.cjs all",
+    "verify:queue-log-replay:local": "node scripts/verify-queue-log-replay.cjs all --config wrangler.local.toml",
     "leaderboard:download": "tsx scripts/leaderboard-to-text.ts",
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",

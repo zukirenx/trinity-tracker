@@ -231,7 +231,10 @@ export const it: Record<string, string> = {
       'settings.autoOpen': 'Apertura automatica iscrizioni',
       'settings.autoOpen.help': 'Se attivato, le iscrizioni Canyon Storm si aprono automaticamente ogni venerd\u00ec alle 00:00 UTC.',
       'settings.teamA': 'Squadra A', 'settings.teamB': 'Squadra B',
-      'settings.timeNote': 'Orari in ora del server di gioco (UTC+2, offset fisso).',
+      'settings.timeNote': 'Tutti gli orari sono in ora del server (UTC-2).',
+      'settings.regCloseCanyon': 'Chiusura iscrizioni — luned\u00ec (ora del server)',
+      'settings.regCloseDesert': 'Chiusura iscrizioni — mercoled\u00ec (ora del server)',
+      'settings.regCloseHelp': 'Ora 0–23 in ora del server (UTC-2); anche il giorno \u00e8 contato in ora del server. Vale solo per gli eventi creati dopo; quelli gi\u00e0 aperti mantengono la scadenza.',
       'settings.save.canyon': 'Salva (Canyon)', 'settings.save.desert': 'Salva (Desert)',
       'settings.saved': 'Salvato.', 'settings.saving': 'Salvataggio\u2026',
       'settings.openCanyonNow': 'Apri subito le iscrizioni Canyon',
@@ -240,7 +243,7 @@ export const it: Record<string, string> = {
       'settings.opened': 'Iscrizioni aperte per la settimana {week}.',
       'settings.alreadyOpen': 'Iscrizioni gi\u00e0 aperte per la settimana {week}.',
       'settings.timezone': 'Fuso orario di visualizzazione',
-      'settings.tz.note': 'Salvato nel browser. Influisce sulla visualizzazione degli orari degli eventi.',
+      'settings.tz.note': 'Salvato nel browser. Influisce sulla visualizzazione degli orari. Gli orari impostati sotto sono sempre in ora del server (UTC-2).',
       'settings.unsaved': '\u25cf Modifiche non salvate',
 };
 
