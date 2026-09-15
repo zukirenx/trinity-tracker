@@ -8,8 +8,6 @@ Serverless Discord bot + web dashboard for a Last War alliance. It tracks train-
 - **Dashboard:** same Worker serves `GET /` with admin and read-only tokens
 - **Tests:** Vitest, ~15 test files, real SQLite via `better-sqlite3` in tests
 
-This repo is a clean handoff: no secrets, no player data, no database dumps. One commit, ready for a new maintainer to deploy from scratch.
-
 ---
 
 ## 1. What you get
