@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import worker, { type Env, buildRosterPostMessages, getNextMondayWeekStart } from '../src/index';
+import worker, { type Env, buildRosterPostMessages, getNextMondayWeekStart, getRosterChannel } from '../src/index';
 import { renderPage } from '../src/web/page';
 import { PAGE_STYLES } from '../src/web/page/styles';
 import { CLIENT_ROSTER } from '../src/web/page/client/roster';
@@ -1575,6 +1575,55 @@ describe('Worker web routing', () => {
       expect(html).toContain('<option value="03:00">23:00</option>');
       expect(html).toContain('<option value="22:00">18:00</option>');
       expect(html).toContain('<option value="13:00">09:00</option>');
+    });
+  });
+
+  describe('roster channel routing', () => {
+    it('uses ROSTER_CHANNEL_ID when set', () => {
+      const env = makeEnv({ TRACKING_CHANNEL_ID: 'track-1', ROSTER_CHANNEL_ID: 'roster-9' });
+      expect(getRosterChannel(env)).toBe('roster-9');
+    });
+
+    it('falls back to TRACKING_CHANNEL_ID when ROSTER_CHANNEL_ID is missing', () => {
+      const env = makeEnv({ TRACKING_CHANNEL_ID: 'track-1' });
+      expect(getRosterChannel(env)).toBe('track-1');
+    });
+
+    it('treats empty/whitespace ROSTER_CHANNEL_ID as missing (falls back)', () => {
+      for (const bad of ['', '   ']) {
+        const env = makeEnv({ TRACKING_CHANNEL_ID: 'track-1', ROSTER_CHANNEL_ID: bad });
+        expect(getRosterChannel(env)).toBe('track-1');
+      }
+    });
+
+    it('POST /api/events/post-roster posts to the roster channel, not the train log', async () => {
+      const env = makeEnv({ TRACKING_CHANNEL_ID: 'track-1', ROSTER_CHANNEL_ID: 'roster-9' });
+      const ev = await makeRosteredEvent(env, '2026-06-01', '2026-06-01T12:00:00.000Z');
+      const urls: string[] = [];
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async (url: unknown) => {
+        urls.push(String(url));
+        return new Response('{}', { status: 200 });
+      }) as typeof fetch;
+      try {
+        const res = await worker.fetch(
+          new Request('https://example.com/api/events/post-roster', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer secret-token' },
+            body: JSON.stringify({ eventId: ev.id }),
+          }),
+          env,
+          ctx,
+        );
+        expect(res.status).toBe(200);
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+      expect(urls).toHaveLength(2);
+      for (const u of urls) {
+        expect(u).toContain('/channels/roster-9/messages');
+        expect(u).not.toContain('/channels/track-1/messages');
+      }
     });
   });
 

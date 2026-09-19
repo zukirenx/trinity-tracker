@@ -37,9 +37,27 @@ import { suggestRoster, DS_ROLE_SLOTS, CANYON_ROLE_SLOTS, seededRng, hashString 
  * Discord channel for roster/registration announcements.
  * Set ROSTER_CHANNEL_ID as a Worker secret/env var. Falls back to
  * TRACKING_CHANNEL_ID so a single-channel setup keeps working.
+ *
+ * NOTE: if you use a separate announcements channel, ROSTER_CHANNEL_ID must
+ * be set (wrangler secret put ROSTER_CHANNEL_ID). When it is missing the bot
+ * posts announcements/rosters into the train-log (TRACKING) channel, which
+ * pollutes the log.
  */
-function getRosterChannel(env: Env): string {
-  return env.ROSTER_CHANNEL_ID ?? env.TRACKING_CHANNEL_ID;
+export function getRosterChannel(env: Env): string {
+  const roster = env.ROSTER_CHANNEL_ID?.trim();
+  if (roster) return roster;
+  if (env.ROSTER_CHANNEL_ID != null && env.ROSTER_CHANNEL_ID.trim() === '') {
+    console.warn(
+      '[config] ROSTER_CHANNEL_ID is set but empty — falling back to TRACKING_CHANNEL_ID. ' +
+      'Set it to the announcements channel ID to keep the train log clean.',
+    );
+  } else {
+    console.warn(
+      '[config] ROSTER_CHANNEL_ID is not set — posting announcements/rosters to TRACKING_CHANNEL_ID. ' +
+      'Set ROSTER_CHANNEL_ID to the announcements channel ID to keep the train log clean.',
+    );
+  }
+  return env.TRACKING_CHANNEL_ID;
 }
 
 /** 02:00 UTC == midnight at UTC-2 (game-server time). */
