@@ -251,6 +251,22 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
 </section>
 
 <section id="panel-upload" class="panel hidden"${adminOnlyAttr}>
+  <div id="upload-pending-wrap" class="hidden" style="margin-bottom:.75rem;border:1px solid var(--warn);border-radius:6px;background:var(--panel-2);padding:.6rem .8rem">
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+      <strong style="font-size:.9rem" data-i18n="upload.pendingTitle">Unfinished score reviews</strong>
+      <span class="spacer" style="flex:1"></span>
+      <button id="upload-pending-refresh" type="button" class="muted" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:.25rem .6rem;cursor:pointer;font-size:.8rem" data-i18n="common.refresh">Refresh</button>
+    </div>
+    <p class="muted" style="font-size:.8rem;margin:.35rem 0 .5rem" data-i18n="upload.pendingHelp">These leaderboards were uploaded but their score review (queue penalties / Desert Storm bans) was not finished. You can go back and resume any of them.</p>
+    <div id="upload-pending-list" style="display:flex;flex-direction:column;gap:.4rem"></div>
+  </div>
+  <details style="margin-bottom:.75rem">
+    <summary style="cursor:pointer;color:var(--accent);font-weight:600" data-i18n="upload.after.title">What happens after upload (click to expand)</summary>
+    <div class="muted" style="font-size:.85rem;line-height:1.5;margin-top:.5rem">
+      <p data-i18n="upload.after.p1">After you resolve missing members, a score review dialog opens. Both penalty rules are optional and disabled by default: players below the minimum move down the train queue by N spots, and players above the maximum move down with an escalating penalty (base −1, −1 more per M points of excess, capped at −X). Players who hit the cap several leaderboards in a row are listed as regular offenders — you can confirm a Desert Storm ban for them that applies only to the next Desert Storm with open registration, exactly once.</p>
+      <p data-i18n="upload.after.p2">If you close the dialog, nothing is lost: the leaderboard stays uploaded and the review appears under “Unfinished score reviews” above so you can resume it later. Queue penalties and Desert Storm bans can each be applied only once per leaderboard. Default thresholds can be changed in Settings → Leaderboard score penalties.</p>
+    </div>
+  </details>
   <details style="margin-bottom:.75rem">
     <summary style="cursor:pointer;color:var(--accent);font-weight:600" data-i18n="upload.how.title">How to obtain the JSON (click to expand)</summary>
     <div class="muted" style="font-size:.85rem;line-height:1.5;margin-top:.5rem">
@@ -296,6 +312,52 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
       <span class="status" id="upload-apply-status"></span>
     </div>
   </div>
+
+  <dialog id="upload-score-dialog" style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:1.1rem 1.25rem;min-width:min(94vw,640px);max-width:94vw;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;flex-direction:column;gap:.7rem">
+      <h3 style="margin:0;font-size:1rem"><span data-i18n="score.title">Score review</span> <span class="muted" id="score-slug-label" style="font-weight:400;font-size:.85rem"></span></h3>
+      <p class="muted" style="margin:0;font-size:.8rem;line-height:1.4" data-i18n="score.intro">Both rules are optional and off by default. Enable a rule to preview who would move down the train queue (away from #1), then apply. Each step can be applied only once per leaderboard.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:.6rem">
+        <fieldset style="border:1px solid var(--border);border-radius:6px;padding:.6rem .7rem;margin:0">
+          <legend style="font-size:.85rem;font-weight:600;padding:0 .3rem"><label style="display:flex;align-items:center;gap:.4rem;cursor:pointer"><input type="checkbox" id="score-min-enabled" /> <span data-i18n="score.minTitle">Below minimum</span></label></legend>
+          <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted)"><span data-i18n="score.minLabel">Minimum score (e.g. 7.2M)</span><input type="text" id="score-min-points" value="7.2M" disabled style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .45rem" /></label>
+          <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted);margin-top:.4rem"><span data-i18n="score.minPenaltyLabel">Queue spots lost (N)</span><input type="number" id="score-below-penalty" value="1" min="1" max="50" disabled style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .45rem" /></label>
+        </fieldset>
+        <fieldset style="border:1px solid var(--border);border-radius:6px;padding:.6rem .7rem;margin:0">
+          <legend style="font-size:.85rem;font-weight:600;padding:0 .3rem"><label style="display:flex;align-items:center;gap:.4rem;cursor:pointer"><input type="checkbox" id="score-max-enabled" /> <span data-i18n="score.maxTitle">Above maximum</span></label></legend>
+          <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted)"><span data-i18n="score.maxLabel">Maximum score (optional, e.g. 10M)</span><input type="text" id="score-max-points" value="" placeholder="—" disabled style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .45rem" /></label>
+          <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted);margin-top:.4rem"><span data-i18n="score.stepLabel">Severe threshold M (extra −1 per M over max)</span><input type="text" id="score-severe-step" value="1M" disabled style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .45rem" /></label>
+          <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted);margin-top:.4rem"><span data-i18n="score.capLabel">Maximum penalty (X)</span><input type="number" id="score-max-cap" value="5" min="1" max="50" disabled style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .45rem" /></label>
+        </fieldset>
+      </div>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.85rem;color:var(--muted)"><span data-i18n="score.streakLabel">Regular offender: capped max hits in a row (Y)</span><input type="number" id="score-streak-threshold" value="2" min="1" max="25" style="width:4.5rem;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .45rem" /></label>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+        <button id="score-preview-btn" type="button" style="background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:.4rem .9rem;cursor:pointer;font-weight:600" data-i18n="score.preview">Preview</button>
+        <button id="score-apply-btn" type="button" disabled style="background:var(--accent);border:none;color:#0d1117;border-radius:4px;padding:.4rem .9rem;cursor:pointer;font-weight:600;opacity:.5" data-i18n="score.apply">Apply queue penalties</button>
+        <button id="score-skip-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:.4rem .8rem;cursor:pointer" data-i18n="score.skip">Skip penalties</button>
+        <span class="status" id="score-status"></span>
+      </div>
+      <div id="score-preview-wrap" class="hidden">
+        <h4 style="margin:.4rem 0 .3rem;font-size:.9rem" data-i18n="score.previewTitle">Penalties preview</h4>
+        <div class="table-wrap"><table id="score-preview-table"><thead><tr><th data-i18n="board.col.commander">Commander</th><th class="num" data-i18n="board.col.points">Points</th><th class="num" data-i18n="score.col.penalty">Penalty</th><th data-i18n="score.col.reason">Reason</th></tr></thead><tbody></tbody></table></div>
+        <div id="score-preview-empty" class="empty hidden" data-i18n="score.previewEmpty">No players fall outside the selected thresholds.</div>
+      </div>
+      <div id="score-regulars-wrap" class="hidden" style="border-top:1px solid var(--border);padding-top:.6rem">
+        <h4 style="margin:.2rem 0 .3rem;font-size:.9rem" data-i18n="score.regularsTitle">Regular offenders — Desert Storm ban</h4>
+        <p class="muted" id="score-ds-note" style="font-size:.8rem;margin:.2rem 0 .5rem;line-height:1.45"></p>
+        <div id="score-regulars-list" style="display:flex;flex-direction:column;gap:.35rem;max-height:260px;overflow-y:auto"></div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.55rem">
+          <button id="score-bans-confirm-btn" type="button" disabled style="background:#d97070;border:none;color:#0d1117;border-radius:4px;padding:.4rem .9rem;cursor:pointer;font-weight:600;opacity:.5" data-i18n="score.bansConfirm">Confirm DS bans</button>
+          <button id="score-bans-skip-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:.4rem .8rem;cursor:pointer" data-i18n="score.bansSkip">Skip bans</button>
+          <span class="status" id="score-bans-status"></span>
+        </div>
+      </div>
+      <div style="display:flex;gap:.5rem;justify-content:flex-end;border-top:1px solid var(--border);padding-top:.6rem">
+        <button id="score-skip-all-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:.4rem .9rem;cursor:pointer" data-i18n="score.skipAll">Skip entire review</button>
+        <button id="score-close-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--text);border-radius:4px;padding:.4rem .9rem;cursor:pointer" data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </dialog>
 </section>
 
 <section id="panel-events" class="panel hidden">
@@ -539,6 +601,23 @@ export function renderBody(opts: { isAdmin: boolean; adminOnlyAttr: string }): s
     <div style="display:flex;align-items:center;gap:.75rem">
       <button id="settings-desert-save" style="background:var(--accent);border:none;color:#0d1117;border-radius:4px;padding:.4rem .9rem;cursor:pointer;font-weight:600" data-i18n="settings.save.desert">Save Desert settings</button>
       <span id="settings-desert-status" class="muted" style="font-size:.85rem"></span>
+    </div>
+  </div>
+
+  <h2 style="margin:.25rem 0 .75rem;font-size:1rem"${adminOnlyAttr} data-i18n="settings.score.title">Leaderboard score penalties</h2>
+  <div class="ev-card" style="display:flex;flex-direction:column;gap:.65rem"${adminOnlyAttr}>
+    <p class="muted" style="margin:0;font-size:.8rem;line-height:1.4" data-i18n="settings.score.help">Defaults used by the score review dialog after each leaderboard upload. Both rules stay disabled per upload until the admin enables them; these are only the prefilled values. Points accept plain numbers or M/k suffixes (e.g. 7.2M).</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem">
+      <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted)"><span data-i18n="settings.score.min">Minimum score</span><input type="text" id="settings-score-min" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem" /></label>
+      <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted)"><span data-i18n="settings.score.below">Below-min penalty (spots)</span><input type="number" id="settings-score-below" min="1" max="50" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem" /></label>
+      <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted)"><span data-i18n="settings.score.max">Maximum score (empty = unset)</span><input type="text" id="settings-score-max" placeholder="—" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem" /></label>
+      <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted)"><span data-i18n="settings.score.step">Severe threshold M</span><input type="text" id="settings-score-step" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem" /></label>
+      <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted)"><span data-i18n="settings.score.cap">Maximum penalty (spots)</span><input type="number" id="settings-score-cap" min="1" max="50" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem" /></label>
+      <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.8rem;color:var(--muted)"><span data-i18n="settings.score.streak">Regular: capped hits in a row</span><input type="number" id="settings-score-streak" min="1" max="25" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.3rem .4rem" /></label>
+    </div>
+    <div style="display:flex;align-items:center;gap:.75rem">
+      <button id="settings-score-save" style="background:var(--accent);border:none;color:#0d1117;border-radius:4px;padding:.4rem .9rem;cursor:pointer;font-weight:600" data-i18n="settings.save.score">Save score settings</button>
+      <span id="settings-score-status" class="muted" style="font-size:.85rem"></span>
     </div>
   </div>
 </section>

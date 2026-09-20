@@ -9,6 +9,19 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
     if (el) el.value = String(val);
   }
 
+  // Compact points formatting for score-default inputs (7200000 -> "7.2M").
+  function scoreFmt(n) {
+    if (n === null || n === undefined || n === '') return '';
+    if (!isFinite(Number(n))) return String(n);
+    var v = Number(n);
+    if (v >= 1000000) {
+      var m = v / 1000000;
+      return (m >= 100 ? String(Math.round(m)) : String(Math.round(m * 10) / 10)) + 'M';
+    }
+    if (v >= 1000) return (Math.round(v / 100) / 10) + 'k';
+    return String(v);
+  }
+
   function settingsInit() {
     // ── Timezone selector (all users) ──────────────────────────────────────
     var tzSel = document.getElementById('settings-tz');
@@ -25,6 +38,30 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
     if (!IS_ADMIN) return; // remaining controls are admin-only
     // ── Admin: Canyon / Desert settings ────────────────────────────────────
     settingsLoad();
+    // ── Admin: Leaderboard score-penalty defaults ──────────────────────────
+    function markScoreUnsaved() {
+      var st = document.getElementById('settings-score-status');
+      if (st && st.textContent !== t('settings.unsaved')) {
+        st.textContent = t('settings.unsaved');
+        st.style.color = 'var(--warn)';
+      }
+    }
+    ['settings-score-min', 'settings-score-below', 'settings-score-max', 'settings-score-step', 'settings-score-cap', 'settings-score-streak'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', markScoreUnsaved);
+    });
+    var scoreSave = document.getElementById('settings-score-save');
+    if (scoreSave) scoreSave.addEventListener('click', function () {
+      var maxRaw = (document.getElementById('settings-score-max') || { value: '' }).value.trim();
+      settingsSave({
+        scoreMinPoints: (document.getElementById('settings-score-min') || { value: '' }).value,
+        scoreBelowPenalty: Number((document.getElementById('settings-score-below') || { value: '1' }).value),
+        scoreMaxPoints: maxRaw === '' ? null : maxRaw,
+        scoreSevereStep: (document.getElementById('settings-score-step') || { value: '' }).value,
+        scoreMaxCap: Number((document.getElementById('settings-score-cap') || { value: '5' }).value),
+        scoreStreakThreshold: Number((document.getElementById('settings-score-streak') || { value: '2' }).value),
+      }, 'settings-score-status');
+    });
     // Mark Canyon section unsaved whenever any field changes.
     function markCanyonUnsaved() {
       var st = document.getElementById('settings-canyon-status');
@@ -171,6 +208,19 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
         settingsSetValue('settings-desert-a-time', s.desertATime);
         settingsSetValue('settings-desert-b-time', s.desertBTime);
         settingsSetValue('settings-desert-close-time', s.desertCloseTime || '12:00');
+        // Score-penalty defaults (points accept M/k suffixes on save; show compact here).
+        var smin = document.getElementById('settings-score-min');
+        if (smin) smin.value = scoreFmt(s.scoreMinPoints !== undefined ? s.scoreMinPoints : 7200000);
+        var sbelow = document.getElementById('settings-score-below');
+        if (sbelow) sbelow.value = String(s.scoreBelowPenalty !== undefined ? s.scoreBelowPenalty : 1);
+        var smax = document.getElementById('settings-score-max');
+        if (smax) smax.value = (s.scoreMaxPoints === null || s.scoreMaxPoints === undefined) ? '' : scoreFmt(s.scoreMaxPoints);
+        var sstep = document.getElementById('settings-score-step');
+        if (sstep) sstep.value = scoreFmt(s.scoreSevereStep !== undefined ? s.scoreSevereStep : 1000000);
+        var scap = document.getElementById('settings-score-cap');
+        if (scap) scap.value = String(s.scoreMaxCap !== undefined ? s.scoreMaxCap : 5);
+        var sstreak = document.getElementById('settings-score-streak');
+        if (sstreak) sstreak.value = String(s.scoreStreakThreshold !== undefined ? s.scoreStreakThreshold : 2);
       })
       .catch(function (err) { console.error('Settings load error:', err); });
   }
@@ -199,6 +249,12 @@ export const CLIENT_SETTINGS: string = `  // ---- Settings tab (admin only) ----
             settingsSetValue('settings-desert-a-time', s.desertATime);
             settingsSetValue('settings-desert-b-time', s.desertBTime);
             settingsSetValue('settings-desert-close-time', s.desertCloseTime || '12:00');
+            if (s.scoreMinPoints !== undefined) settingsSetValue('settings-score-min', scoreFmt(s.scoreMinPoints));
+            if (s.scoreBelowPenalty !== undefined) settingsSetValue('settings-score-below', s.scoreBelowPenalty);
+            if (s.scoreMaxPoints !== undefined) settingsSetValue('settings-score-max', (s.scoreMaxPoints === null) ? '' : scoreFmt(s.scoreMaxPoints));
+            if (s.scoreSevereStep !== undefined) settingsSetValue('settings-score-step', scoreFmt(s.scoreSevereStep));
+            if (s.scoreMaxCap !== undefined) settingsSetValue('settings-score-cap', s.scoreMaxCap);
+            if (s.scoreStreakThreshold !== undefined) settingsSetValue('settings-score-streak', s.scoreStreakThreshold);
           }
         } else {
           if (statusEl) statusEl.textContent = t('common.error') + (data.error || 'unknown error');

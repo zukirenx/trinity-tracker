@@ -32,6 +32,12 @@ import {
   type EventsSettings,
 } from './eventsStore';
 import { suggestRoster, DS_ROLE_SLOTS, CANYON_ROLE_SLOTS, seededRng, hashString } from './utils/eventSuggest';
+import {
+  normalizeScorePenaltyConfig,
+  computeScorePenalties,
+  parsePointsInput,
+  type ScorePenaltyConfig,
+} from './utils/scorePenalties';
 
 /**
  * Discord channel for roster/registration announcements.
@@ -490,6 +496,14 @@ export default {
         kind: 'desert', weekStart, teamAStartsAt, teamBStartsAt, registrationClosesAt, notes,
       });
       console.log(`[scheduled] Auto-created Desert Storm event id=${created.id} weekStart=${weekStart} closes=${registrationClosesAt}`);
+      // Attach score bans that were confirmed while no DS had open
+      // registration: they wait for exactly this next event.
+      try {
+        const attached = await eventsStore.attachQueuedScoreBansToDesert(created.id);
+        if (attached > 0) console.log(`[scheduled] Attached ${attached} queued score ban(s) to Desert Storm event ${created.id}`);
+      } catch (err) {
+        console.error(`[scheduled] Failed to attach queued score bans to event ${created.id}:`, err);
+      }
 
       // Post registration-open announcement to Discord — all times in server time
       // (UTC-2). In server time all Desert slots fall on Friday (the 03:00 game
@@ -762,6 +776,100 @@ async function getReferenceDateIso(store: DataStore): Promise<string | null> {
   return store.getLatestRewardDate();
 }
 
+// ---------------------------------------------------------------------------
+// Leaderboard score reviews (queue penalties + regular-offender DS bans).
+// Shared preview builder: recomputed server-side from live entries on every
+// call so clients can never tamper with penalties.
+// ---------------------------------------------------------------------------
+
+interface ScorePreviewRegular {
+  normalized: string;
+  commander: string;
+  memberId: number | null;
+  points: number;
+  streak: number;
+  alreadyBanned: boolean;
+}
+
+async function buildScorePreview(
+  store: DataStore,
+  eventsStore: EventsStore,
+  slug: string,
+  rawConfig: unknown,
+): Promise<{
+  slug: string;
+  leaderboardId: number;
+  config: ScorePenaltyConfig;
+  penalties: Array<{
+    normalized: string; commander: string; memberId: number | null;
+    points: number; penalty: number; reason: 'below-min' | 'above-max' | null;
+    rawPenalty: number; capped: boolean;
+  }>;
+  regulars: ScorePreviewRegular[];
+  targetDesert: { id: number; weekStart: string; registrationClosesAt: string | null } | null;
+  closedDesert: { id: number; weekStart: string; registrationClosesAt: string | null } | null;
+  alreadyApplied: boolean;
+}> {
+  const cleaned = String(slug ?? '').trim();
+  if (!cleaned) throw new Error('slug is required');
+  const board = await store.getLeaderboardBySlug(cleaned);
+  if (!board) throw new Error('leaderboard not found');
+  const config = normalizeScorePenaltyConfig(rawConfig);
+  const entries = await store.getScoreReviewEntries(board.leaderboard.id);
+  const computed = computeScorePenalties(
+    entries.map((e) => ({ normalized: e.normalized, commander: e.commander, points: e.points, memberId: e.memberId })),
+    config,
+  );
+  const penalties = computed
+    .filter((p) => p.penalty > 0)
+    .map((p) => ({
+      normalized: p.normalized,
+      commander: p.commander,
+      memberId: p.memberId ?? null,
+      points: p.points,
+      penalty: p.penalty,
+      reason: p.reason,
+      rawPenalty: p.rawPenalty,
+      capped: p.capped,
+    }));
+  const cappedHits = penalties
+    .filter((p) => p.reason === 'above-max' && p.capped)
+    .map((p) => ({ normalized: p.normalized, memberId: p.memberId }));
+  const streaks = await store.getCappedStreaks(board.leaderboard.id, cappedHits);
+  const [targetDesert, closedDesert] = await Promise.all([
+    eventsStore.findNextDesertWithOpenRegistration(),
+    eventsStore.findLatestClosedDesert(),
+  ]);
+  const bannedIds = targetDesert ? await eventsStore.getScoreBannedMemberIds(targetDesert.id) : [];
+  const bannedSet = new Set(bannedIds);
+  const regulars: ScorePreviewRegular[] = penalties
+    .filter((p) => p.reason === 'above-max' && p.capped)
+    .map((p) => ({
+      normalized: p.normalized,
+      commander: p.commander,
+      memberId: p.memberId,
+      points: p.points,
+      streak: streaks.get(p.normalized) ?? 1,
+      alreadyBanned: p.memberId !== null && bannedSet.has(p.memberId),
+    }))
+    .filter((r) => r.streak >= config.streakThreshold)
+    .sort((a, b) => b.streak - a.streak || b.points - a.points || a.commander.localeCompare(b.commander));
+  return {
+    slug: cleaned,
+    leaderboardId: board.leaderboard.id,
+    config,
+    penalties,
+    regulars,
+    targetDesert: targetDesert
+      ? { id: targetDesert.id, weekStart: targetDesert.weekStart, registrationClosesAt: targetDesert.registrationClosesAt }
+      : null,
+    closedDesert: closedDesert
+      ? { id: closedDesert.id, weekStart: closedDesert.weekStart, registrationClosesAt: closedDesert.registrationClosesAt }
+      : null,
+    alreadyApplied: await store.hasScorePenalties(board.leaderboard.id),
+  };
+}
+
 async function handleWebApiPost(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '') || '/';
@@ -852,7 +960,14 @@ async function handleWebApiPost(request: Request, env: Env): Promise<Response> {
       const result = await store.uploadLeaderboard({
         slug, title, weekStart, weekEnd, source, pointsMultiplier, entries,
       });
-      return jsonResponse(result);
+      // Open a score-review so the admin can apply queue penalties / DS bans
+      // afterwards — and resume it if the dialog is closed prematurely.
+      try {
+        await store.ensureScoreReview(result.slug, result.leaderboardId);
+      } catch (err) {
+        console.error('ensureScoreReview failed for slug', result.slug, err);
+      }
+      return jsonResponse({ ...result, scoreReviewPending: true });
     } catch (err: any) {
       return jsonResponse({ error: err?.message ?? 'upload failed' }, { status: 400 });
     }
@@ -978,6 +1093,195 @@ async function handleWebApiPost(request: Request, env: Env): Promise<Response> {
     }
   }
 
+  // ---- Leaderboard score reviews ----
+  if (path === '/api/leaderboard-score-preview') {
+    const slug = String(body?.slug ?? '').trim();
+    if (!slug) return jsonResponse({ error: 'slug is required' }, { status: 400 });
+    try {
+      const eventsStore = new EventsStore(env.DB);
+      const preview = await buildScorePreview(store, eventsStore, slug, body?.config);
+      const review = await store.getScoreReview(preview.slug);
+      return jsonResponse({
+        ...preview,
+        review: review
+          ? { penaltiesStatus: review.penaltiesStatus, bansStatus: review.bansStatus }
+          : { penaltiesStatus: 'pending', bansStatus: 'pending' },
+      });
+    } catch (err: any) {
+      const msg = err?.message ?? 'preview failed';
+      const status = msg === 'leaderboard not found' ? 404 : 400;
+      return jsonResponse({ error: msg }, { status });
+    }
+  }
+
+  if (path === '/api/leaderboard-score-apply') {
+    const slug = String(body?.slug ?? '').trim();
+    if (!slug) return jsonResponse({ error: 'slug is required' }, { status: 400 });
+    try {
+      const eventsStore = new EventsStore(env.DB);
+      const preview = await buildScorePreview(store, eventsStore, slug, body?.config);
+      const review = await store.ensureScoreReview(preview.slug, preview.leaderboardId);
+      if (review.penaltiesStatus !== 'pending' || preview.alreadyApplied) {
+        return jsonResponse({ error: 'queue penalties were already applied for this leaderboard and cannot be applied twice' }, { status: 409 });
+      }
+      if (preview.penalties.length === 0) {
+        await store.setScoreReviewStatus(preview.slug, 'penalties_status', 'skipped', {
+          configJson: JSON.stringify(preview.config),
+          resultJson: JSON.stringify({ penalties: [] }),
+        });
+        return jsonResponse({ ok: true, slug: preview.slug, moves: [], skipped: [], penalties: [] });
+      }
+      // Persist penalty rows first: UNIQUE(leaderboard_id, normalized) makes
+      // this step itself once-only even under concurrent double-submits.
+      await store.saveScorePenalties(
+        preview.leaderboardId,
+        preview.penalties.map((p) => ({
+          memberId: p.memberId,
+          normalized: p.normalized,
+          commander: p.commander,
+          points: p.points,
+          rawPenalty: p.rawPenalty,
+          appliedPenalty: p.penalty,
+          capped: p.capped,
+          reason: p.reason as 'below-min' | 'above-max',
+        })),
+      );
+      // Apply queue moves (down = away from position 1). Only members
+      // currently in the queue can move; everyone else is reported skipped.
+      await store.syncTrainQueue();
+      const queue = await store.getTrainQueue();
+      const inQueue = new Set(queue.map((q) => q.memberId));
+      const skipped: Array<{ memberId: number | null; commander: string; reason: string }> = [];
+      const bySpots = new Map<number, { memberId: number; commander: string; points: number; reason: string }[]>();
+      for (const p of preview.penalties) {
+        if (p.memberId === null || !inQueue.has(p.memberId)) {
+          skipped.push({ memberId: p.memberId, commander: p.commander, reason: 'not-in-queue' });
+          continue;
+        }
+        const group = bySpots.get(p.penalty) ?? [];
+        group.push({ memberId: p.memberId, commander: p.commander, points: p.points, reason: p.reason as string });
+        bySpots.set(p.penalty, group);
+      }
+      const moves: Array<{ memberId: number; displayName: string; fromPos: number; toPos: number }> = [];
+      const orderedSpots = Array.from(bySpots.keys()).sort((a, b) => a - b);
+      for (const spots of orderedSpots) {
+        const group = bySpots.get(spots)!;
+        const comment = `VS penalty ${preview.slug}: ${group[0].reason === 'below-min' ? 'below minimum' : 'above maximum'} (-${spots})`;
+        try {
+          const applied = await store.bulkMoveQueueMembers(
+            group.map((g) => g.memberId),
+            'down',
+            spots,
+            comment,
+          );
+          moves.push(...applied);
+        } catch (err: any) {
+          for (const g of group) skipped.push({ memberId: g.memberId, commander: g.commander, reason: err?.message ?? 'move failed' });
+        }
+      }
+      await store.setScoreReviewStatus(preview.slug, 'penalties_status', 'done', {
+        configJson: JSON.stringify(preview.config),
+        resultJson: JSON.stringify({ moves, skipped, penalties: preview.penalties }),
+      });
+      // No capped-max repeat offenders under the applied config means the bans
+      // step can never produce anything for this board — close it right away
+      // instead of nagging the admin with an unfinishable "unfinished" review.
+      let bansAutoSkipped = false;
+      if (preview.regulars.length === 0 && review.bansStatus === 'pending') {
+        await store.setScoreReviewStatus(preview.slug, 'bans_status', 'skipped', {
+          configJson: JSON.stringify(preview.config),
+          resultJson: JSON.stringify({ confirmed: [], reason: 'no-regular-offenders' }),
+        });
+        bansAutoSkipped = true;
+      }
+      return jsonResponse({ ok: true, slug: preview.slug, moves, skipped, penalties: preview.penalties, bansAutoSkipped });
+    } catch (err: any) {
+      const msg = err?.message ?? 'apply failed';
+      if (/already applied/.test(msg)) return jsonResponse({ error: msg }, { status: 409 });
+      const status = msg === 'leaderboard not found' ? 404 : 400;
+      return jsonResponse({ error: msg }, { status });
+    }
+  }
+
+  if (path === '/api/leaderboard-score-bans') {
+    const slug = String(body?.slug ?? '').trim();
+    if (!slug) return jsonResponse({ error: 'slug is required' }, { status: 400 });
+    try {
+      const eventsStore = new EventsStore(env.DB);
+      const preview = await buildScorePreview(store, eventsStore, slug, body?.config);
+      const review = await store.ensureScoreReview(preview.slug, preview.leaderboardId);
+      if (review.bansStatus !== 'pending') {
+        return jsonResponse({ error: 'Desert Storm bans were already confirmed for this leaderboard and cannot be applied twice' }, { status: 409 });
+      }
+      const rawIds = Array.isArray(body?.memberIds) ? body.memberIds : [];
+      const memberIds = rawIds.map((v: unknown) => Number(v)).filter((n: number) => Number.isInteger(n) && n > 0);
+      if (memberIds.length === 0) {
+        await store.setScoreReviewStatus(preview.slug, 'bans_status', 'skipped', {
+          configJson: JSON.stringify(preview.config),
+          resultJson: JSON.stringify({ confirmed: [] }),
+        });
+        return jsonResponse({
+          ok: true, slug: preview.slug, confirmed: [],
+          targetDesert: preview.targetDesert, closedDesert: preview.closedDesert,
+          bannedNow: [], alreadyBanned: [], queued: [],
+        });
+      }
+      // Safety: only confirmed regular offenders can be banned through this
+      // endpoint (arbitrary bans keep using /api/events/ban).
+      const regularIds = new Set(preview.regulars.map((r) => r.memberId).filter((v): v is number => typeof v === 'number' && v > 0));
+      const outsiders = memberIds.filter((id: number) => !regularIds.has(id));
+      if (outsiders.length > 0) {
+        return jsonResponse({ error: 'members not on the regular-offender list: ' + outsiders.join(', ') }, { status: 400 });
+      }
+      const confirmed = await eventsStore.confirmScoreDsBans({
+        sourceSlug: preview.slug,
+        memberIds,
+        targetEventId: preview.targetDesert ? preview.targetDesert.id : null,
+      });
+      await store.setScoreReviewStatus(preview.slug, 'bans_status', 'done', {
+        configJson: JSON.stringify(preview.config),
+        resultJson: JSON.stringify({ confirmed: memberIds, ...confirmed }),
+      });
+      return jsonResponse({
+        ok: true, slug: preview.slug, confirmed: memberIds,
+        targetDesert: preview.targetDesert, closedDesert: preview.closedDesert,
+        ...confirmed,
+      });
+    } catch (err: any) {
+      const msg = err?.message ?? 'ban confirm failed';
+      if (/already confirmed/.test(msg)) return jsonResponse({ error: msg }, { status: 409 });
+      const status = msg === 'leaderboard not found' ? 404 : 400;
+      return jsonResponse({ error: msg }, { status });
+    }
+  }
+
+  if (path === '/api/leaderboard-score-skip') {
+    const slug = String(body?.slug ?? '').trim();
+    if (!slug) return jsonResponse({ error: 'slug is required' }, { status: 400 });
+    const scope = String(body?.scope ?? 'all');
+    if (!['all', 'penalties', 'bans'].includes(scope)) {
+      return jsonResponse({ error: 'scope must be all, penalties or bans' }, { status: 400 });
+    }
+    try {
+      const board = await store.getLeaderboardBySlug(slug);
+      if (!board) return jsonResponse({ error: 'leaderboard not found' }, { status: 404 });
+      const review = await store.ensureScoreReview(board.leaderboard.slug, board.leaderboard.id);
+      if (scope === 'all' || scope === 'penalties') {
+        if (review.penaltiesStatus === 'pending') {
+          await store.setScoreReviewStatus(board.leaderboard.slug, 'penalties_status', 'skipped');
+        }
+      }
+      if (scope === 'all' || scope === 'bans') {
+        if (review.bansStatus === 'pending') {
+          await store.setScoreReviewStatus(board.leaderboard.slug, 'bans_status', 'skipped');
+        }
+      }
+      return jsonResponse({ ok: true, slug: board.leaderboard.slug });
+    } catch (err: any) {
+      return jsonResponse({ error: err?.message ?? 'skip failed' }, { status: 400 });
+    }
+  }
+
   if (path === '/api/queue/move') {
     const memberId = Number(body?.memberId);
     const position = Number(body?.position);
@@ -1081,6 +1385,57 @@ async function handleWebApiPost(request: Request, env: Env): Promise<Response> {
           return jsonResponse({ error: `${field} must be HH:00 (hour only, 00:00-23:00, server time)` }, { status: 400 });
         (patch as Record<string, unknown>)[field] = v;
       }
+    }
+
+    // Leaderboard score-penalty defaults (all optional in the patch).
+    if ('scoreMinPoints' in body || 'scoreMinPointsM' in body) {
+      const raw = 'scoreMinPoints' in body ? body.scoreMinPoints : body.scoreMinPointsM;
+      const parsed = typeof raw === 'string' && /[mMkK,]/.test(raw) ? parsePointsInput(raw) : Number(raw);
+      if (parsed === null || !Number.isFinite(parsed as number) || (parsed as number) < 0) {
+        return jsonResponse({ error: 'scoreMinPoints must be a non-negative number of points (e.g. 7200000 or "7.2M")' }, { status: 400 });
+      }
+      (patch as Record<string, unknown>).scoreMinPoints = Math.floor(parsed as number);
+    }
+    if ('scoreBelowPenalty' in body) {
+      const n = Number(body.scoreBelowPenalty);
+      if (!Number.isInteger(n) || n < 1 || n > 50) {
+        return jsonResponse({ error: 'scoreBelowPenalty must be an integer 1-50' }, { status: 400 });
+      }
+      (patch as Record<string, unknown>).scoreBelowPenalty = n;
+    }
+    if ('scoreMaxPoints' in body) {
+      const raw = body.scoreMaxPoints;
+      if (raw === null || raw === '' || raw === undefined) {
+        (patch as Record<string, unknown>).scoreMaxPoints = null;
+      } else {
+        const parsed = typeof raw === 'string' && /[mMkK,]/.test(raw) ? parsePointsInput(raw) : Number(raw);
+        if (parsed === null || !Number.isFinite(parsed as number) || (parsed as number) < 0) {
+          return jsonResponse({ error: 'scoreMaxPoints must be empty (unset) or a non-negative number of points' }, { status: 400 });
+        }
+        (patch as Record<string, unknown>).scoreMaxPoints = Math.floor(parsed as number);
+      }
+    }
+    if ('scoreSevereStep' in body) {
+      const raw = body.scoreSevereStep;
+      const parsed = typeof raw === 'string' && /[mMkK,]/.test(raw) ? parsePointsInput(raw) : Number(raw);
+      if (parsed === null || !Number.isInteger(parsed as number) || (parsed as number) < 1) {
+        return jsonResponse({ error: 'scoreSevereStep must be a positive integer' }, { status: 400 });
+      }
+      (patch as Record<string, unknown>).scoreSevereStep = Math.floor(parsed as number);
+    }
+    if ('scoreMaxCap' in body) {
+      const n = Number(body.scoreMaxCap);
+      if (!Number.isInteger(n) || n < 1 || n > 50) {
+        return jsonResponse({ error: 'scoreMaxCap must be an integer 1-50' }, { status: 400 });
+      }
+      (patch as Record<string, unknown>).scoreMaxCap = n;
+    }
+    if ('scoreStreakThreshold' in body) {
+      const n = Number(body.scoreStreakThreshold);
+      if (!Number.isInteger(n) || n < 1 || n > 25) {
+        return jsonResponse({ error: 'scoreStreakThreshold must be an integer 1-25' }, { status: 400 });
+      }
+      (patch as Record<string, unknown>).scoreStreakThreshold = n;
     }
 
     try {
@@ -1223,6 +1578,10 @@ async function handleWebApiPost(request: Request, env: Env): Promise<Response> {
         // kind was 'no-show', ban them automatically in this open event.
         if (statusVal === 'IN' && event.status === 'open') {
           await eventsStore.checkAndApplyNoshowBan(eventId, memberId);
+          // Score bans: a confirmed regular max-cap offender is banned in the
+          // exact next-DS event their leaderboard review targeted — including
+          // late registrants who signed up after the admin confirmed.
+          await eventsStore.checkAndApplyScoreBan(eventId, memberId);
         }
         return jsonResponse({ ok: true, registration: reg });
       } catch (err: any) {
@@ -1667,6 +2026,50 @@ async function handleWebRequest(request: Request, env: Env): Promise<Response> {
         alreadyOpen: upcomingCanyon?.status === 'open',
       },
     });
+  }
+
+  if (path === '/api/leaderboard-score-pending') {
+    if (role !== 'admin') return jsonResponse({ error: 'admin required' }, { status: 403 });
+    const pending = await store.listPendingScoreReviews();
+    return jsonResponse({ pending });
+  }
+
+  if (path === '/api/leaderboard-score-status') {
+    if (role !== 'admin') return jsonResponse({ error: 'admin required' }, { status: 403 });
+    const slug = String(url.searchParams.get('slug') ?? '').trim();
+    if (!slug) return jsonResponse({ error: 'slug is required' }, { status: 400 });
+    try {
+      const eventsStore = new EventsStore(env.DB);
+      const settings = await eventsStore.getEventsSettings();
+      const preview = await buildScorePreview(store, eventsStore, slug, {
+        minEnabled: false,
+        minPoints: settings.scoreMinPoints,
+        belowMinPenalty: settings.scoreBelowPenalty,
+        maxEnabled: false,
+        maxPoints: settings.scoreMaxPoints,
+        severeStep: settings.scoreSevereStep,
+        maxCap: settings.scoreMaxCap,
+        streakThreshold: settings.scoreStreakThreshold,
+      });
+      const review = await store.getScoreReview(preview.slug);
+      return jsonResponse({
+        ...preview,
+        defaults: {
+          minPoints: settings.scoreMinPoints,
+          belowMinPenalty: settings.scoreBelowPenalty,
+          maxPoints: settings.scoreMaxPoints,
+          severeStep: settings.scoreSevereStep,
+          maxCap: settings.scoreMaxCap,
+          streakThreshold: settings.scoreStreakThreshold,
+        },
+        review: review
+          ? { penaltiesStatus: review.penaltiesStatus, bansStatus: review.bansStatus }
+          : { penaltiesStatus: 'pending', bansStatus: 'pending' },
+      });
+    } catch (err: any) {
+      const msg = err?.message ?? 'status failed';
+      return jsonResponse({ error: msg }, { status: msg === 'leaderboard not found' ? 404 : 400 });
+    }
   }
 
   if (role !== 'admin') {

@@ -30,6 +30,7 @@ export const CLIENT_TABS: string = `  // ---- Tab switching ----
     }
     if (name === 'upload') {
       ensureUploadExamples();
+      try { loadScorePending(); } catch (e) { /* ignore */ }
     }
     if (name === 'events' && !evInitialized) {
       evInitialized = true;

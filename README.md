@@ -251,6 +251,23 @@ Screenshots → JSON → D1. The OCR step is intentionally external (any vision 
 
 You can also upload directly from the dashboard **Upload leaderboard** tab (paste JSON, set Name + Slug, submit, then resolve missing members inline). Uploads from the dashboard are tagged `source = 'web-interface'`.
 
+### 7a. Score review (queue penalties + Desert Storm bans)
+
+After missing members are resolved (Keep / deactivate / merge), the dashboard opens a **Score review** dialog for the uploaded leaderboard:
+
+- **Below minimum** (off by default; minimum defaults to `7.2M`): every player below the minimum moves **down** the train queue (away from #1) by N spots (N defaults to 1).
+- **Above maximum** (off by default; maximum unset by default): every player above the maximum moves down with an escalating penalty — base −1, −1 more per full M points of excess (M defaults to `1M`), capped at −X spots (X defaults to 5). Example with max `10M`: `11.9M` → −2, `14.9M` → −5, `20M` → −5 (capped).
+- Equality with a threshold never penalises. Points accept `M`/`k` suffixes (`7.2M`).
+- **Preview first, then apply.** The preview lists every penalised player (commander, points, −N, reason, capped flag). Apply / Confirm-bans stay disabled until the preview matches the current settings — changing any value forces a re-preview, so you can never apply something different from what was shown. Applying writes one `train_queue_log` entry per move (replay-safe) and **can be done only once per leaderboard** — a second apply returns `409`.
+- **Regular offenders.** Players who hit the max cap Y leaderboards **in a row** (Y defaults to 2, adjustable per review) are listed with checkboxes (all checked; uncheck to exclude anyone). Confirming applies a **Desert Storm ban** with these guarantees, also shown in the dialog:
+  - the ban hits **only the next Desert Storm with open registration** (the DS with closed registration is explicitly named as NOT affected; late registrants are banned automatically on sign-up);
+  - the ban happens **exactly once per player** — confirming two leaderboards for the same upcoming DS bans once (`UNIQUE(member_id, target_event_id)`);
+  - if no DS has open registration, bans are **queued** and attached to the next DS when it opens (Saturday cron).
+- **Resume.** Closing the dialog loses nothing: the leaderboard stays uploaded and the review appears under **Unfinished score reviews** (top of the Upload tab) until both steps are done or skipped. Queue penalties and DS bans are tracked independently (`leaderboard_score_reviews.penalties_status` / `bans_status`). **Skip entire review** in the dialog footer dismisses both steps at once with no preview needed.
+- **Defaults** live in **Settings → Leaderboard score penalties** (min, below-min N, max, step M, cap X, streak Y), stored as `setting:score_*` in `metadata`. The dialog always starts with both rules disabled; the settings only prefill the values.
+
+Tables: `leaderboard_score_reviews` (one-shot state per slug), `leaderboard_score_penalties` (per-player applied/capped rows, feeds streaks), `leaderboard_ds_bans` (ban queue + dedup). API (admin-only): `POST /api/leaderboard-score-preview|apply|bans|skip`, `GET /api/leaderboard-score-status|pending`.
+
 ---
 
 ## 8. Tests + deployment workflow

@@ -90,7 +90,22 @@ export interface EventsSettings {
   desertBTime: string;
   canyonCloseTime: string; // 'HH:00', hour-only wall time in SERVER time — Monday of the event week
   desertCloseTime: string; // 'HH:00', hour-only wall time in SERVER time — Wednesday of the event week
+  // Leaderboard score-penalty defaults (see src/utils/scorePenalties.ts).
+  // scoreMaxPoints: null = no default maximum (optional per upload).
+  scoreMinPoints: number;
+  scoreBelowPenalty: number;
+  scoreMaxPoints: number | null;
+  scoreSevereStep: number;
+  scoreMaxCap: number;
+  scoreStreakThreshold: number;
 }
+
+/** Defaults for the leaderboard score-penalty settings (see scorePenalties.ts). */
+export const DEFAULT_SCORE_MIN_POINTS = 7_200_000;
+export const DEFAULT_SCORE_BELOW_PENALTY = 1;
+export const DEFAULT_SCORE_SEVERE_STEP = 1_000_000;
+export const DEFAULT_SCORE_MAX_CAP = 5;
+export const DEFAULT_SCORE_STREAK_THRESHOLD = 2;
 
 export const VALID_CANYON_TIMES: readonly string[] = ['16:00', '03:00'];
 export const VALID_DESERT_TIMES: readonly string[] = ['13:00', '22:00', '03:00'];
@@ -1227,6 +1242,12 @@ export class EventsStore {
     return fallback;
   }
 
+  private parseScoreInt(raw: string | undefined, fallback: number): number {
+    if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
+    const n = Math.floor(Number(raw));
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+  }
+
   async getEventsSettings(): Promise<EventsSettings> {
     const keys = [
       'setting:canyon_auto_open',
@@ -1240,12 +1261,22 @@ export class EventsStore {
       // one-way migration only, never written anymore.
       'setting:canyon_close_time',
       'setting:desert_close_time',
+      'setting:score_min_points',
+      'setting:score_below_penalty',
+      'setting:score_max_points',
+      'setting:score_severe_step',
+      'setting:score_max_cap',
+      'setting:score_streak_threshold',
     ];
     const rows = await this.db
       .prepare(`SELECT key, value FROM metadata WHERE key IN (${keys.map(() => '?').join(',')})`)
       .bind(...keys)
       .all<{ key: string; value: string }>();
     const m = new Map(rows.results.map((r) => [r.key, r.value]));
+    const maxRaw = m.get('setting:score_max_points');
+    const maxParsed = maxRaw === undefined || maxRaw === null || String(maxRaw).trim() === ''
+      ? null
+      : Math.floor(Number(maxRaw));
     return {
       canyonAutoOpen: m.get('setting:canyon_auto_open') !== '0',
       canyonATime: m.get('setting:canyon_a_time') ?? '16:00',
@@ -1262,6 +1293,12 @@ export class EventsStore {
         m.get('setting:desert_close_time'),
         DEFAULT_DESERT_CLOSE_TIME,
       ),
+      scoreMinPoints: this.parseScoreInt(m.get('setting:score_min_points'), DEFAULT_SCORE_MIN_POINTS),
+      scoreBelowPenalty: Math.max(1, Math.min(50, this.parseScoreInt(m.get('setting:score_below_penalty'), DEFAULT_SCORE_BELOW_PENALTY) || 1)),
+      scoreMaxPoints: maxParsed !== null && Number.isFinite(maxParsed) && maxParsed >= 0 ? maxParsed : null,
+      scoreSevereStep: Math.max(1, this.parseScoreInt(m.get('setting:score_severe_step'), DEFAULT_SCORE_SEVERE_STEP) || 1),
+      scoreMaxCap: Math.max(1, Math.min(50, this.parseScoreInt(m.get('setting:score_max_cap'), DEFAULT_SCORE_MAX_CAP) || 1)),
+      scoreStreakThreshold: Math.max(1, Math.min(25, this.parseScoreInt(m.get('setting:score_streak_threshold'), DEFAULT_SCORE_STREAK_THRESHOLD) || 1)),
     };
   }
 
@@ -1285,6 +1322,40 @@ export class EventsStore {
       if (!isValidCloseTime(patch.desertCloseTime)) throw new Error('invalid desertCloseTime');
       pairs.push(['setting:desert_close_hour', patch.desertCloseTime]);
     }
+    if (patch.scoreMinPoints !== undefined) {
+      const n = Math.floor(Number(patch.scoreMinPoints));
+      if (!Number.isFinite(n) || n < 0) throw new Error('invalid scoreMinPoints');
+      pairs.push(['setting:score_min_points', String(n)]);
+    }
+    if (patch.scoreBelowPenalty !== undefined) {
+      const n = Math.floor(Number(patch.scoreBelowPenalty));
+      if (!Number.isInteger(n) || n < 1 || n > 50) throw new Error('invalid scoreBelowPenalty');
+      pairs.push(['setting:score_below_penalty', String(n)]);
+    }
+    if (patch.scoreMaxPoints !== undefined) {
+      if (patch.scoreMaxPoints === null) {
+        pairs.push(['setting:score_max_points', '']);
+      } else {
+        const n = Math.floor(Number(patch.scoreMaxPoints));
+        if (!Number.isFinite(n) || n < 0) throw new Error('invalid scoreMaxPoints');
+        pairs.push(['setting:score_max_points', String(n)]);
+      }
+    }
+    if (patch.scoreSevereStep !== undefined) {
+      const n = Math.floor(Number(patch.scoreSevereStep));
+      if (!Number.isInteger(n) || n < 1) throw new Error('invalid scoreSevereStep');
+      pairs.push(['setting:score_severe_step', String(n)]);
+    }
+    if (patch.scoreMaxCap !== undefined) {
+      const n = Math.floor(Number(patch.scoreMaxCap));
+      if (!Number.isInteger(n) || n < 1 || n > 50) throw new Error('invalid scoreMaxCap');
+      pairs.push(['setting:score_max_cap', String(n)]);
+    }
+    if (patch.scoreStreakThreshold !== undefined) {
+      const n = Math.floor(Number(patch.scoreStreakThreshold));
+      if (!Number.isInteger(n) || n < 1 || n > 25) throw new Error('invalid scoreStreakThreshold');
+      pairs.push(['setting:score_streak_threshold', String(n)]);
+    }
     if (pairs.length === 0) return;
     const stmts = pairs.map(([k, v]) =>
       this.db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').bind(k, v),
@@ -1305,12 +1376,255 @@ export class EventsStore {
       .prepare(
         `SELECT id, kind, week_start, team_a_starts_at, team_b_starts_at,
                 registration_closes_at, status, notes, attendance_recorded, created_at, updated_at
-         FROM poc_events_event WHERE kind = ? AND status = 'open'
-         ORDER BY week_start DESC`,
+          FROM poc_events_event WHERE kind = ? AND status = 'open'
+          ORDER BY week_start DESC`,
       )
       .bind(kind)
       .all<EventRow>();
     return rows.results.map(mapEvent);
+  }
+
+  /**
+   * Next Desert Storm with registration still open (status='open' and deadline
+   * in the future or unset), earliest week first. Closed-registration DS
+   * events are deliberately excluded — score bans never touch them.
+   */
+  async findNextDesertWithOpenRegistration(nowIso?: string): Promise<EvEvent | null> {
+    const now = nowIso ?? new Date().toISOString();
+    const row = await this.db
+      .prepare(
+        `SELECT id, kind, week_start, team_a_starts_at, team_b_starts_at,
+                registration_closes_at, status, notes, attendance_recorded, created_at, updated_at
+          FROM poc_events_event
+          WHERE kind = 'desert' AND status = 'open'
+            AND (registration_closes_at IS NULL OR registration_closes_at > ?)
+          ORDER BY week_start ASC, id ASC LIMIT 1`,
+      )
+      .bind(now)
+      .first<EventRow>();
+    return row ? mapEvent(row) : null;
+  }
+
+  /** Latest open Desert Storm whose registration already closed (for the dialog note). */
+  async findLatestClosedDesert(nowIso?: string): Promise<EvEvent | null> {
+    const now = nowIso ?? new Date().toISOString();
+    const row = await this.db
+      .prepare(
+        `SELECT id, kind, week_start, team_a_starts_at, team_b_starts_at,
+                registration_closes_at, status, notes, attendance_recorded, created_at, updated_at
+          FROM poc_events_event
+          WHERE kind = 'desert' AND status = 'open'
+            AND registration_closes_at IS NOT NULL AND registration_closes_at <= ?
+          ORDER BY week_start DESC, id DESC LIMIT 1`,
+      )
+      .bind(now)
+      .first<EventRow>();
+    return row ? mapEvent(row) : null;
+  }
+
+  /**
+   * Confirm Desert Storm bans for regular score offenders. Idempotent per
+   * (member, target event): already-banned pairs are skipped and reported.
+   * Members already registered in the target event are banned immediately;
+   * late registrants are caught by checkAndApplyScoreBan() at registration.
+   */
+  async confirmScoreDsBans(input: {
+    sourceSlug: string;
+    memberIds: number[];
+    targetEventId: number | null;
+  }): Promise<{ bannedNow: number[]; alreadyBanned: number[]; queued: number[] }> {
+    const ids = Array.from(new Set(input.memberIds.filter((n) => Number.isInteger(n) && n > 0)));
+    const bannedNow: number[] = [];
+    const alreadyBanned: number[] = [];
+    const queued: number[] = [];
+    if (ids.length === 0) return { bannedNow, alreadyBanned, queued };
+    // Resolve display names for the ban rows (chunked: D1 allows ~100
+    // bound variables per statement and a big regulars list could exceed it).
+    const byId = new Map<number, { id: number; display_name: string; normalized_name: string }>();
+    for (let i = 0; i < ids.length; i += 50) {
+      const part = ids.slice(i, i + 50);
+      const placeholders = part.map(() => '?').join(',');
+      const memberRows = await this.db
+        .prepare(`SELECT id, display_name, normalized_name FROM members WHERE id IN (${placeholders})`)
+        .bind(...part)
+        .all<{ id: number; display_name: string; normalized_name: string }>();
+      for (const r of memberRows.results) byId.set(r.id, r);
+    }
+    for (const memberId of ids) {
+      const member = byId.get(memberId);
+      if (!member) continue;
+      if (input.targetEventId !== null) {
+        const existing = await this.db
+          .prepare('SELECT id FROM leaderboard_ds_bans WHERE member_id = ? AND target_event_id = ?')
+          .bind(memberId, input.targetEventId)
+          .first<{ id: number }>();
+        if (existing) {
+          alreadyBanned.push(memberId);
+          continue;
+        }
+        await this.db
+          .prepare(
+            `INSERT INTO leaderboard_ds_bans (member_id, normalized, source_slug, target_event_id)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .bind(memberId, member.normalized_name, input.sourceSlug, input.targetEventId)
+          .run();
+        // Ban immediately when a registration row already exists.
+        const res = await this.db
+          .prepare(
+            `UPDATE poc_events_registration SET is_banned = 1, updated_at = datetime('now')
+             WHERE event_id = ? AND member_id = ?`,
+          )
+          .bind(input.targetEventId, memberId)
+          .run();
+        if ((res.meta?.changes ?? 0) > 0) bannedNow.push(memberId);
+        else queued.push(memberId);
+      } else {
+        // No open DS right now: queue. Dedup per (member, slug) so two
+        // confirms of the same board don't stack queued rows.
+        const dup = await this.db
+          .prepare(
+            'SELECT id FROM leaderboard_ds_bans WHERE member_id = ? AND source_slug = ? AND target_event_id IS NULL',
+          )
+          .bind(memberId, input.sourceSlug)
+          .first<{ id: number }>();
+        if (dup) {
+          alreadyBanned.push(memberId);
+          continue;
+        }
+        await this.db
+          .prepare(
+            `INSERT INTO leaderboard_ds_bans (member_id, normalized, source_slug, target_event_id)
+             VALUES (?, ?, ?, NULL)`,
+          )
+          .bind(memberId, member.normalized_name, input.sourceSlug)
+          .run();
+        queued.push(memberId);
+      }
+    }
+    // Collapse queued duplicates: if a member now has both a targeted row and
+    // queued rows, the queued rows are redundant (the ban already happened for
+    // the next DS) — drop them so the ban stays once-only.
+    if (input.targetEventId !== null) {
+      for (const memberId of [...bannedNow, ...queued]) {
+        const targeted = await this.db
+          .prepare('SELECT id FROM leaderboard_ds_bans WHERE member_id = ? AND target_event_id = ?')
+          .bind(memberId, input.targetEventId)
+          .first<{ id: number }>();
+        if (targeted) {
+          await this.db
+            .prepare('DELETE FROM leaderboard_ds_bans WHERE member_id = ? AND target_event_id IS NULL')
+            .bind(memberId)
+            .run();
+        }
+      }
+    }
+    return { bannedNow, alreadyBanned, queued };
+  }
+
+  /**
+   * Late-registration hook for score bans (mirrors checkAndApplyNoshowBan).
+   * Called after an IN upsert on an open event: bans the member when a
+   * pending score-ban row targets this exact event. Unassigned (queued) rows
+   * are claimed when this event is the current next open-registration DS.
+   */
+  async checkAndApplyScoreBan(eventId: number, memberId: number): Promise<boolean> {
+    const event = await this.getEvent(eventId);
+    if (!event || event.status !== 'open' || event.kind !== 'desert') return false;
+    const direct = await this.db
+      .prepare('SELECT id FROM leaderboard_ds_bans WHERE member_id = ? AND target_event_id = ?')
+      .bind(memberId, eventId)
+      .first<{ id: number }>();
+    if (direct) {
+      const res = await this.db
+        .prepare(
+          `UPDATE poc_events_registration SET is_banned = 1, updated_at = datetime('now')
+           WHERE event_id = ? AND member_id = ?`,
+        )
+        .bind(eventId, memberId)
+        .run();
+      return (res.meta?.changes ?? 0) > 0;
+    }
+    // Claim a queued row when this event is the next open-registration DS.
+    const queued = await this.db
+      .prepare(
+        'SELECT id FROM leaderboard_ds_bans WHERE member_id = ? AND target_event_id IS NULL ORDER BY id ASC LIMIT 1',
+      )
+      .bind(memberId)
+      .first<{ id: number }>();
+    if (!queued) return false;
+    const next = await this.findNextDesertWithOpenRegistration();
+    if (!next || next.id !== eventId) return false;
+    try {
+      await this.db
+        .prepare('UPDATE leaderboard_ds_bans SET target_event_id = ? WHERE id = ?')
+        .bind(eventId, queued.id)
+        .run();
+    } catch {
+      // Lost a race with another claim for the same (member, event) — the
+      // winner's row already bans; treat as already covered.
+      await this.db.prepare('DELETE FROM leaderboard_ds_bans WHERE id = ?').bind(queued.id).run();
+    }
+    const res = await this.db
+      .prepare(
+        `UPDATE poc_events_registration SET is_banned = 1, updated_at = datetime('now')
+         WHERE event_id = ? AND member_id = ?`,
+      )
+      .bind(eventId, memberId)
+      .run();
+    return (res.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Attach queued (target-less) score bans to a newly opened Desert Storm.
+   * Called after a desert event is created. Collapses duplicates so each
+   * member is banned at most once for the event.
+   */
+  async attachQueuedScoreBansToDesert(targetEventId: number): Promise<number> {
+    const rows = await this.db
+      .prepare(
+        'SELECT id, member_id FROM leaderboard_ds_bans WHERE target_event_id IS NULL ORDER BY id ASC',
+      )
+      .all<{ id: number; member_id: number }>();
+    let attached = 0;
+    const claimed = new Set<number>();
+    for (const row of rows.results) {
+      if (claimed.has(row.member_id)) {
+        await this.db.prepare('DELETE FROM leaderboard_ds_bans WHERE id = ?').bind(row.id).run();
+        continue;
+      }
+      const existing = await this.db
+        .prepare('SELECT id FROM leaderboard_ds_bans WHERE member_id = ? AND target_event_id = ?')
+        .bind(row.member_id, targetEventId)
+        .first<{ id: number }>();
+      if (existing) {
+        await this.db.prepare('DELETE FROM leaderboard_ds_bans WHERE id = ?').bind(row.id).run();
+        continue;
+      }
+      await this.db
+        .prepare('UPDATE leaderboard_ds_bans SET target_event_id = ? WHERE id = ?')
+        .bind(targetEventId, row.id)
+        .run();
+      await this.db
+        .prepare(
+          `UPDATE poc_events_registration SET is_banned = 1, updated_at = datetime('now')
+           WHERE event_id = ? AND member_id = ?`,
+        )
+        .bind(targetEventId, row.member_id)
+        .run();
+      claimed.add(row.member_id);
+      attached += 1;
+    }
+    return attached;
+  }
+
+  /** Member ids already score-banned in an event (for dialog "already banned" badges). */
+  async getScoreBannedMemberIds(eventId: number): Promise<number[]> {
+    const rows = await this.db
+      .prepare('SELECT member_id FROM leaderboard_ds_bans WHERE target_event_id = ?')
+      .bind(eventId)
+      .all<{ member_id: number }>();
+    return rows.results.map((r) => r.member_id);
   }
 }
 

@@ -2290,16 +2290,277 @@ export class DataStore {
 
   async getStats() {
     const result = await this.db.prepare(
-      `SELECT 
+      `SELECT
         (SELECT COUNT(*) FROM members) as total_members,
         (SELECT COUNT(*) FROM members WHERE active = 1) as active_members,
         (SELECT COUNT(*) FROM rewards) as total_rewards`
     ).first<{ total_members: number; active_members: number; total_rewards: number }>();
-    
+
     return {
       totalMembers: result?.total_members ?? 0,
       activeMembers: result?.active_members ?? 0,
       totalRewards: result?.total_rewards ?? 0,
     };
+  }
+
+  // ---------------- Leaderboard score reviews ----------------
+
+  async ensureScoreReview(slug: string, leaderboardId: number): Promise<{
+    slug: string;
+    leaderboardId: number;
+    penaltiesStatus: string;
+    bansStatus: string;
+  }> {
+    await this.db.prepare(
+      `INSERT OR IGNORE INTO leaderboard_score_reviews (slug, leaderboard_id) VALUES (?, ?)`
+    ).bind(slug, leaderboardId).run();
+    const row = await this.db.prepare(
+      'SELECT slug, leaderboard_id, penalties_status, bans_status FROM leaderboard_score_reviews WHERE slug = ?'
+    ).bind(slug).first<{ slug: string; leaderboard_id: number; penalties_status: string; bans_status: string }>();
+    if (!row) throw new Error('failed to create score review');
+    return { slug: row.slug, leaderboardId: row.leaderboard_id, penaltiesStatus: row.penalties_status, bansStatus: row.bans_status };
+  }
+
+  async getScoreReview(slug: string): Promise<{
+    slug: string;
+    leaderboardId: number;
+    penaltiesStatus: string;
+    bansStatus: string;
+    configJson: string | null;
+    resultJson: string | null;
+  } | null> {
+    const row = await this.db.prepare(
+      `SELECT slug, leaderboard_id, penalties_status, bans_status, config_json, result_json
+       FROM leaderboard_score_reviews WHERE slug = ? LIMIT 1`
+    ).bind(slug).first<{ slug: string; leaderboard_id: number; penalties_status: string; bans_status: string; config_json: string | null; result_json: string | null }>();
+    if (!row) return null;
+    return {
+      slug: row.slug,
+      leaderboardId: row.leaderboard_id,
+      penaltiesStatus: row.penalties_status,
+      bansStatus: row.bans_status,
+      configJson: row.config_json ?? null,
+      resultJson: row.result_json ?? null,
+    };
+  }
+
+  async listPendingScoreReviews(): Promise<Array<{
+    slug: string;
+    leaderboardId: number;
+    title: string | null;
+    penaltiesStatus: string;
+    bansStatus: string;
+    createdAt: string;
+  }>> {
+    const rows = await this.db.prepare(
+      `SELECT r.slug, r.leaderboard_id, l.title, r.penalties_status, r.bans_status, r.created_at
+       FROM leaderboard_score_reviews r
+       JOIN leaderboards l ON l.id = r.leaderboard_id
+       WHERE r.penalties_status = 'pending' OR r.bans_status = 'pending'
+       ORDER BY r.created_at DESC, r.slug ASC`
+    ).all<{ slug: string; leaderboard_id: number; title: string | null; penalties_status: string; bans_status: string; created_at: string }>();
+    return rows.results.map((r) => ({
+      slug: r.slug,
+      leaderboardId: r.leaderboard_id,
+      title: r.title ?? null,
+      penaltiesStatus: r.penalties_status,
+      bansStatus: r.bans_status,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async setScoreReviewStatus(
+    slug: string,
+    field: 'penalties_status' | 'bans_status',
+    status: 'pending' | 'done' | 'skipped',
+    extra?: { configJson?: string; resultJson?: string },
+  ): Promise<void> {
+    const sets = [`${field} = ?`, `updated_at = datetime('now')`];
+    const vals: (string | null)[] = [status];
+    if (extra?.configJson !== undefined) {
+      sets.push('config_json = ?');
+      vals.push(extra.configJson);
+    }
+    if (extra?.resultJson !== undefined) {
+      sets.push('result_json = ?');
+      vals.push(extra.resultJson);
+    }
+    vals.push(slug);
+    await this.db.prepare(
+      `UPDATE leaderboard_score_reviews SET ${sets.join(', ')} WHERE slug = ?`
+    ).bind(...vals).run();
+  }
+
+  /** Leaderboard entries joined to member ids (via direct or alias match). */
+  async getScoreReviewEntries(leaderboardId: number): Promise<Array<{
+    rank: number;
+    commander: string;
+    normalized: string;
+    points: number;
+    memberId: number | null;
+    memberName: string | null;
+  }>> {
+    const entryRows = await this.db.prepare(
+      `SELECT rank, commander, normalized_commander, points
+       FROM leaderboard_entries WHERE leaderboard_id = ? ORDER BY rank ASC`
+    ).bind(leaderboardId).all<{ rank: number; commander: string; normalized_commander: string; points: number }>();
+    if (entryRows.results.length === 0) return [];
+    const memberRows = await this.db.prepare(
+      'SELECT id, display_name, normalized_name FROM members'
+    ).all<{ id: number; display_name: string; normalized_name: string }>();
+    const byNorm = new Map<string, { id: number; display_name: string }>();
+    for (const m of memberRows.results) {
+      if (!byNorm.has(m.normalized_name)) byNorm.set(m.normalized_name, { id: m.id, display_name: m.display_name });
+    }
+    const aliasRows = await this.db.prepare(
+      'SELECT member_id, alias FROM member_aliases'
+    ).all<{ member_id: number; alias: string }>();
+    const memberById = new Map(memberRows.results.map((m) => [m.id, m] as const));
+    for (const a of aliasRows.results) {
+      const member = memberById.get(a.member_id);
+      if (!member) continue;
+      const norm = normalizeCommanderName(a.alias) || this.normalize(a.alias);
+      if (norm && !byNorm.has(norm)) byNorm.set(norm, { id: a.member_id, display_name: member.display_name });
+    }
+    return entryRows.results.map((e) => {
+      const hit = byNorm.get(e.normalized_commander) ?? null;
+      return {
+        rank: e.rank,
+        commander: e.commander,
+        normalized: e.normalized_commander,
+        points: e.points,
+        memberId: hit ? hit.id : null,
+        memberName: hit ? hit.display_name : null,
+      };
+    });
+  }
+
+  async hasScorePenalties(leaderboardId: number): Promise<boolean> {
+    const row = await this.db.prepare(
+      'SELECT COUNT(*) AS n FROM leaderboard_score_penalties WHERE leaderboard_id = ?'
+    ).bind(leaderboardId).first<{ n: number }>();
+    return (row?.n ?? 0) > 0;
+  }
+
+  async saveScorePenalties(
+    leaderboardId: number,
+    rows: Array<{
+      memberId: number | null;
+      normalized: string;
+      commander: string;
+      points: number;
+      rawPenalty: number;
+      appliedPenalty: number;
+      capped: boolean;
+      reason: 'below-min' | 'above-max';
+    }>,
+  ): Promise<number> {
+    if (rows.length === 0) return 0;
+    if (await this.hasScorePenalties(leaderboardId)) {
+      throw new Error('penalties already applied for this leaderboard');
+    }
+    const CHUNK = 10;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const chunk = rows.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+      const values: (string | number | null)[] = [];
+      for (const r of chunk) {
+        values.push(
+          leaderboardId, r.memberId, r.normalized, r.commander, r.points,
+          r.rawPenalty, r.appliedPenalty, r.capped ? 1 : 0, r.reason,
+        );
+      }
+      // 9 columns per row.
+      const ph9 = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+      void placeholders;
+      await this.db.prepare(
+        `INSERT INTO leaderboard_score_penalties
+           (leaderboard_id, member_id, normalized_commander, commander, points, raw_penalty, applied_penalty, capped, reason)
+         VALUES ${ph9}`
+      ).bind(...values).run();
+    }
+    return rows.length;
+  }
+
+  /**
+   * Consecutive capped-max streaks ending at the current leaderboard.
+   * `previewCapped` carries the current board's capped hits (normalized +
+   * memberId); the preview itself counts as streak position 1.
+   */
+  async getCappedStreaks(
+    currentLeaderboardId: number,
+    previewCapped: Array<{ normalized: string; memberId: number | null }>,
+  ): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (previewCapped.length === 0) return result;
+    const boardRows = await this.db.prepare(
+      `SELECT id FROM leaderboards
+       ORDER BY COALESCE(week_end, substr(created_at, 1, 10)) DESC, id DESC`
+    ).all<{ id: number }>();
+    const ordered = boardRows.results.map((r) => r.id);
+    const currentIdx = ordered.indexOf(currentLeaderboardId);
+    const olderBoards = currentIdx >= 0 ? ordered.slice(currentIdx + 1) : [];
+    // All historic capped rows for the candidate norms/members in one query.
+    const norms = Array.from(new Set(previewCapped.map((c) => c.normalized)));
+    const memberIds = Array.from(new Set(previewCapped.map((c) => c.memberId).filter((v): v is number => typeof v === 'number' && v > 0)));
+    const hitByBoard = new Map<number, Set<string>>();
+    const recordHit = (h: { leaderboard_id: number; normalized_commander: string; member_id: number | null }) => {
+      let set = hitByBoard.get(h.leaderboard_id);
+      if (!set) {
+        set = new Set<string>();
+        hitByBoard.set(h.leaderboard_id, set);
+      }
+      set.add(h.normalized_commander);
+      if (h.member_id !== null) set.add(`id:${h.member_id}`);
+    };
+    // D1 allows only ~100 bound variables per statement: a long-lived alliance
+    // easily has 70+ leaderboards, and a wide board can yield dozens of capped
+    // candidates, so a single IN(...) query blows up with
+    // "D1_ERROR: too many SQL variables". Chunk every IN list so each query
+    // stays under ~80 bindings.
+    const chunk = <T>(arr: T[], size: number): T[][] => {
+      const out: T[][] = [];
+      for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+      return out;
+    };
+    if (olderBoards.length > 0 && (norms.length > 0 || memberIds.length > 0)) {
+      const normChunks = norms.length > 0 ? chunk(norms, 30) : [[] as string[]];
+      const idChunks = memberIds.length > 0 ? chunk(memberIds, 30) : [[] as number[]];
+      for (const boards of chunk(olderBoards, 20)) {
+        const boardPh = boards.map(() => '?').join(',');
+        for (const ns of normChunks) {
+          for (const ms of idChunks) {
+            const conds: string[] = [];
+            const vals: (string | number)[] = [];
+            if (ns.length > 0) {
+              conds.push(`normalized_commander IN (${ns.map(() => '?').join(',')})`);
+              vals.push(...ns);
+            }
+            if (ms.length > 0) {
+              conds.push(`member_id IN (${ms.map(() => '?').join(',')})`);
+              vals.push(...ms);
+            }
+            if (conds.length === 0) continue;
+            const hist = await this.db.prepare(
+              `SELECT leaderboard_id, normalized_commander, member_id
+               FROM leaderboard_score_penalties
+               WHERE capped = 1 AND leaderboard_id IN (${boardPh}) AND (${conds.join(' OR ')})`
+            ).bind(...boards, ...vals).all<{ leaderboard_id: number; normalized_commander: string; member_id: number | null }>();
+            for (const h of hist.results) recordHit(h);
+          }
+        }
+      }
+    }
+    for (const c of previewCapped) {
+      let streak = 1;
+      for (const boardId of olderBoards) {
+        const set = hitByBoard.get(boardId);
+        const hit = !!set && (set.has(c.normalized) || (c.memberId !== null && set.has(`id:${c.memberId}`)));
+        if (hit) streak += 1;
+        else break;
+      }
+      result.set(c.normalized, streak);
+    }
+    return result;
   }
 }

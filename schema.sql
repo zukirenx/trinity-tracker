@@ -182,3 +182,63 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_poc_events_participation_log_unique ON poc
 CREATE INDEX IF NOT EXISTS idx_poc_events_participation_log_event ON poc_events_participation_log(event_id);
 CREATE INDEX IF NOT EXISTS idx_poc_events_participation_log_member ON poc_events_participation_log(member_id);
 CREATE INDEX IF NOT EXISTS idx_poc_events_participation_log_ts ON poc_events_participation_log(ts DESC);
+
+-- ============================================================================
+-- Leaderboard score reviews: optional queue penalties + regular-offender DS
+-- bans applied after a leaderboard upload. One row per uploaded slug tracks
+-- the two one-shot steps independently so neither can be applied twice.
+-- penalties_status / bans_status: 'pending' | 'done' | 'skipped'.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS leaderboard_score_reviews (
+  slug TEXT PRIMARY KEY,
+  leaderboard_id INTEGER NOT NULL,
+  penalties_status TEXT NOT NULL DEFAULT 'pending' CHECK(penalties_status IN ('pending', 'done', 'skipped')),
+  bans_status TEXT NOT NULL DEFAULT 'pending' CHECK(bans_status IN ('pending', 'done', 'skipped')),
+  config_json TEXT,
+  result_json TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (leaderboard_id) REFERENCES leaderboards(id) ON DELETE CASCADE
+);
+
+-- One row per penalised player per leaderboard. UNIQUE(leaderboard_id,
+-- normalized_commander) makes the queue-penalty apply idempotent per slug.
+CREATE TABLE IF NOT EXISTS leaderboard_score_penalties (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  leaderboard_id INTEGER NOT NULL,
+  member_id INTEGER,
+  normalized_commander TEXT NOT NULL,
+  commander TEXT NOT NULL,
+  points INTEGER NOT NULL,
+  raw_penalty INTEGER NOT NULL,
+  applied_penalty INTEGER NOT NULL,
+  capped INTEGER NOT NULL DEFAULT 0 CHECK(capped IN (0, 1)),
+  reason TEXT NOT NULL CHECK(reason IN ('below-min', 'above-max')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(leaderboard_id, normalized_commander),
+  FOREIGN KEY (leaderboard_id) REFERENCES leaderboards(id) ON DELETE CASCADE,
+  FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_score_penalties_board ON leaderboard_score_penalties(leaderboard_id);
+CREATE INDEX IF NOT EXISTS idx_score_penalties_commander ON leaderboard_score_penalties(normalized_commander);
+CREATE INDEX IF NOT EXISTS idx_score_penalties_member ON leaderboard_score_penalties(member_id);
+
+-- Confirmed Desert Storm bans for regular max-cap offenders. UNIQUE(member_id,
+-- target_event_id) guarantees "banned only once" even when two leaderboards
+-- confirm the same player for the same next DS. Rows with NULL target are
+-- queued and attached to the next DS with open registration when it appears.
+CREATE TABLE IF NOT EXISTS leaderboard_ds_bans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id INTEGER NOT NULL,
+  normalized TEXT NOT NULL,
+  source_slug TEXT NOT NULL,
+  target_event_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(member_id, target_event_id),
+  FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
+  FOREIGN KEY (target_event_id) REFERENCES poc_events_event(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ds_bans_member ON leaderboard_ds_bans(member_id);
+CREATE INDEX IF NOT EXISTS idx_ds_bans_event ON leaderboard_ds_bans(target_event_id);
+CREATE INDEX IF NOT EXISTS idx_ds_bans_slug ON leaderboard_ds_bans(source_slug);
