@@ -251,16 +251,21 @@ export const CLIENT_ROSTER: string = `  function evRenderRegistrations(regs, eve
         ? '<button class="ev-substitute-btn" data-mid="' + row.memberId + '" data-name="' + escapeHtml(row.memberName) + '" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:.1rem .4rem;cursor:pointer;font-size:.75rem;flex-shrink:0">' + t('ev.roster.substitute') + '</button>'
         : '';
 
-      // Attendance checkbox: mains and subs in locked events (admin only).
+      // Attendance: admin gets checkboxes in locked events; everyone sees
+      // the no-show badge once attendance has been captured.
       // Mains: no-show triggers auto-ban. Subs: tracked for records only, no ban.
       var attendanceCell = '';
       var noShowBadge = '';
-      if (IS_ADMIN && evCurrentStatus === 'locked' && isTeam) {
-        var isPresent = evAttendanceState.get(row.memberId) === true;
-        attendanceCell = '<label title="' + t('ev.attendance.checkTooltip') + '" style="display:flex;align-items:center;gap:.25rem;cursor:pointer;font-size:.75rem;color:var(--muted);flex-shrink:0">' +
-          '<input type="checkbox" class="ev-attendance-check" data-mid="' + row.memberId + '"' + (isPresent ? ' checked' : '') + ' style="cursor:pointer" />' +
-          '\\u2713</label>';
-        if (!isPresent) {
+      if (evCurrentStatus === 'locked' && isTeam) {
+        if (IS_ADMIN) {
+          var isPresent = evAttendanceState.get(row.memberId) === true;
+          attendanceCell = '<label title="' + t('ev.attendance.checkTooltip') + '" style="display:flex;align-items:center;gap:.25rem;cursor:pointer;font-size:.75rem;color:var(--muted);flex-shrink:0">' +
+            '<input type="checkbox" class="ev-attendance-check" data-mid="' + row.memberId + '"' + (isPresent ? ' checked' : '') + ' style="cursor:pointer" />' +
+            '\\u2713</label>';
+          if (!isPresent) {
+            noShowBadge = '<span class="pill bad ev-noshow-badge" style="font-size:.6rem;flex-shrink:0">' + t('ev.attendance.noShowBadge') + '</span>';
+          }
+        } else if (typeof evCurrentOutcomes !== 'undefined' && evCurrentOutcomes && evCurrentOutcomes[row.memberId] === 'no-show') {
           noShowBadge = '<span class="pill bad ev-noshow-badge" style="font-size:.6rem;flex-shrink:0">' + t('ev.attendance.noShowBadge') + '</span>';
         }
       }
@@ -603,9 +608,12 @@ export const CLIENT_ROSTER: string = `  function evRenderRegistrations(regs, eve
       .sort(function (a, b) { return b.power - a.power; });
     var items = mains.map(function (row, i) {
       var role = row.strategyRole || roleSlots[i] || 'main';
+      var compactNoShow = (evCurrentStatus === 'locked' && typeof evCurrentOutcomes !== 'undefined' && evCurrentOutcomes && evCurrentOutcomes[row.memberId] === 'no-show')
+        ? ' <span class="pill bad" style="font-size:.6rem">' + t('ev.attendance.noShowBadge') + '</span>'
+        : '';
       return '<div style="border-bottom:1px solid var(--border);padding:.17rem 0;font-size:.8rem;line-height:1.35">' +
         '<span class="muted">' + (i + 1) + '.</span> ' +
-        '<strong>' + escapeHtml(row.memberName) + '</strong> ' +
+        '<strong>' + escapeHtml(row.memberName) + '</strong>' + compactNoShow + ' ' +
         '<span class="muted">\u2014 ' + escapeHtml(role) + '</span>' +
         '</div>';
     }).join('');

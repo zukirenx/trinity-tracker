@@ -40,6 +40,9 @@ export const CLIENT_EVENTS: string = `  // ---- Events tab ----
   let evAttendanceState = new Map();
   // Whether attendance has already been saved for the current locked event.
   let evAttendanceRecorded = false;
+  // Raw participation outcomes (memberId -> outcome) for the current event.
+  // Used to show no-show badges to read-only users after attendance is recorded.
+  let evCurrentOutcomes = {};
 
   function evSetStatus(id, msg, kind) {
     const el = document.getElementById(id);
@@ -263,12 +266,14 @@ export const CLIENT_EVENTS: string = `  // ---- Events tab ----
       evCurrentStatus = ev.status;
       evPreviousBenched = new Set(data.previousBenched || []);
       evAttendanceRecorded = !!(ev.attendanceRecorded);
+      evCurrentOutcomes = data.outcomes || {};
       // Initialise attendance state from the participation log outcomes.
       // For locked events: played-main → present (true), no-show → absent (false).
-      // If attendance hasn't been recorded yet, default all mains to present (true).
+      // If attendance hasn't been recorded yet, default to unchecked —
+      // admin must tick each player who showed up.
       evAttendanceState = new Map();
       if (ev.status === 'locked') {
-        var outcomes = data.outcomes || {};
+        var outcomes = evCurrentOutcomes;
         (data.assignments || []).forEach(function (a) {
           if (a.role === 'main' || a.role === 'sub') {
             var outcome = outcomes[a.memberId];
