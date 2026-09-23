@@ -291,11 +291,12 @@ export const CLIENT_ROSTER: string = `  function evRenderRegistrations(regs, eve
         '<div class="ev-row-top">' +
           slotCell +
           '<span class="ev-name">' + escapeHtml(row.memberName) + '</span>' +
+          noShowBadge +
           powerCell +
           typePill +
         '</div>' +
         '<div class="ev-row-bot">' +
-          roleBadge + lockBadge + banBadge + noShowBadge + repeatBenchBadge + prioBadge + strategyInput + slotSelect + substituteBtn + attendanceCell +
+          roleBadge + lockBadge + banBadge + repeatBenchBadge + prioBadge + strategyInput + slotSelect + substituteBtn + attendanceCell +
         '</div>' +
       '</div>';
     }
@@ -399,17 +400,20 @@ export const CLIENT_ROSTER: string = `  function evRenderRegistrations(regs, eve
           cb.addEventListener('change', function () {
             const mid = Number(cb.getAttribute('data-mid'));
             evAttendanceState.set(mid, cb.checked);
-            var rowBot = cb.closest('.ev-row-bot');
-            if (rowBot) {
-              var existingBadge = rowBot.querySelector('.ev-noshow-badge');
+            var rowEl = cb.closest('.ev-row');
+            if (rowEl) {
+              var topLine = rowEl.querySelector('.ev-row-top');
+              var existingBadge = topLine ? topLine.querySelector('.ev-noshow-badge') : rowEl.querySelector('.ev-noshow-badge');
               if (cb.checked) {
                 if (existingBadge) existingBadge.remove();
-              } else if (!existingBadge) {
+              } else if (!existingBadge && topLine) {
                 var badge = document.createElement('span');
                 badge.className = 'pill bad ev-noshow-badge';
                 badge.style.cssText = 'font-size:.6rem;flex-shrink:0';
                 badge.textContent = t('ev.attendance.noShowBadge');
-                rowBot.insertBefore(badge, cb.parentElement);
+                var nameEl = topLine.querySelector('.ev-name');
+                if (nameEl && nameEl.nextSibling) topLine.insertBefore(badge, nameEl.nextSibling);
+                else topLine.appendChild(badge);
               }
             }
           });
